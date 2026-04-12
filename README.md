@@ -1,4 +1,6 @@
-# react-native-nitro-bg-timer
+# react-native-nitro-bg-timer-plus
+
+> A maintained fork of [react-native-nitro-bg-timer](https://github.com/tconns/react-native-nitro-bg-timer) by [Thành Công](https://github.com/tconns), continued as an independent project.
 
 Native background timer for React Native built with Nitro Modules.
 
@@ -24,9 +26,9 @@ This module provides high-performance background timer functionality for React N
 ## Installation
 
 ```bash
-npm install react-native-nitro-bg-timer react-native-nitro-modules
+npm install react-native-nitro-bg-timer-plus react-native-nitro-modules
 # or
-yarn add react-native-nitro-bg-timer react-native-nitro-modules
+yarn add react-native-nitro-bg-timer-plus react-native-nitro-modules
 ```
 
 ## Platform Configuration
@@ -71,7 +73,7 @@ Add the following permissions to your `android/app/src/main/AndroidManifest.xml`
 ## Quick Usage
 
 ```ts
-import { BackgroundTimer } from 'react-native-nitro-bg-timer'
+import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 
 // setTimeout - runs once after delay
 const timeoutId = BackgroundTimer.setTimeout(() => {
@@ -162,7 +164,7 @@ BackgroundTimer.setTimeout(() => {
 ```ts
 import React, { useEffect, useState } from 'react'
 import { View, Text, Button } from 'react-native'
-import { BackgroundTimer } from 'react-native-nitro-bg-timer'
+import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 
 const TimerExample = () => {
   const [seconds, setSeconds] = useState(0)
@@ -211,7 +213,7 @@ const TimerExample = () => {
 ### Background Task Simulation
 
 ```ts
-import { BackgroundTimer } from 'react-native-nitro-bg-timer'
+import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 
 class BackgroundTaskManager {
   private taskId: number | null = null
@@ -264,7 +266,7 @@ taskManager.scheduleDelayedTask(5000, () => {
 
 ```ts
 import { useEffect, useRef, useCallback } from 'react'
-import { BackgroundTimer } from 'react-native-nitro-bg-timer'
+import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 
 export const useBackgroundTimer = (
   callback: () => void,
@@ -472,7 +474,7 @@ The API is designed to be a drop-in replacement for most background timer librar
 
 ```ts
 // Just replace the import
-import { BackgroundTimer } from 'react-native-nitro-bg-timer'
+import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 // The rest of your code should work the same
 ```
 
@@ -515,6 +517,7 @@ Special thanks to the following projects that inspired this library:
 
 ## License
 
-MIT © [Thành Công](https://github.com/tconns)
+MIT © 2026 [Marco Crupi](https://github.com/marcocrupi) — react-native-nitro-bg-timer-plus fork
+MIT © 2025 [Thành Công](https://github.com/tconns) — original react-native-nitro-bg-timer
 
-[![Buy Me A Coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://www.buymeacoffee.com/tconns94)
+This project is a fork of [react-native-nitro-bg-timer](https://github.com/tconns/react-native-nitro-bg-timer) and continues under the same MIT license.

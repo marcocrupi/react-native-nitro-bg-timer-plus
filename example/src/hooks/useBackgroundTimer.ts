@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { BackgroundTimer } from 'react-native-nitro-bg-timer'
+import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 
 export const useBackgroundTimer = (
   callback: () => void,

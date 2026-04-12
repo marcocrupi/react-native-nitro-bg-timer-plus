@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
   s.license      = package["license"]
   s.authors      = package["author"]
   s.platforms    = { :ios => min_ios_version_supported, :visionos => 1.0 }
-  s.source       = { :git => "https://github.com/tconns/react-native-nitro-bg-timer.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/marcocrupi/react-native-nitro-bg-timer-plus.git", :tag => "#{s.version}" }
 
   s.source_files = [
     # Implementation (Swift)

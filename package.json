@@ -1,11 +1,11 @@
 {
-  "name": "react-native-nitro-bg-timer",
+  "name": "react-native-nitro-bg-timer-plus",
   "version": "0.1.0",
   "workspaces": [
     ".",
     "example"
   ],
-  "description": "react-native-nitro-bg-timer is a react native package built with Nitro",
+  "description": "react-native-nitro-bg-timer-plus is a React Native package built with Nitro, forked from react-native-nitro-bg-timer",
   "main": "lib/index",
   "module": "lib/index",
   "types": "lib/index.d.ts",
@@ -38,7 +38,7 @@
     "lint": "eslint \"**/*.{js,ts,tsx}\" --fix",
     "lint-ci": "eslint \"**/*.{js,ts,tsx}\" -f @jamesacarr/github-actions",
     "typescript": "tsc",
-    "specs": "typescript && nitrogen --logLevel=\"debug\"",
+    "specs": "tsc && nitrogen --logLevel=\"debug\"",
     "nitrogen": "nitrogen",
     "example:start": "yarn --cwd example start",
     "example:android": "yarn --cwd example android",
@@ -64,27 +64,33 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tconns/react-native-nitro-bg-timer.git"
+    "url": "git+https://github.com/marcocrupi/react-native-nitro-bg-timer-plus.git"
   },
-  "author": "Thành Công <thanhcongns94@gmail.com> (https://github.com/tconns)",
+  "author": "Marco Crupi (https://github.com/marcocrupi)",
+  "contributors": [
+    "Thành Công <thanhcongns94@gmail.com> (https://github.com/tconns) (original author)"
+  ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/tconns/react-native-nitro-bg-timer/issues"
+    "url": "https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/issues"
   },
-  "homepage": "https://github.com/tconns/react-native-nitro-bg-timer#readme",
+  "homepage": "https://github.com/marcocrupi/react-native-nitro-bg-timer-plus#readme",
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },
   "devDependencies": {
     "@react-native/eslint-config": "0.84.1",
     "@types/jest": "^29.5.12",
-    "@types/react": "^19.1.1",
-    "conventional-changelog-conventionalcommits": "^9.1.0",
-    "nitrogen": "^0.35.0",
+    "@types/react": "^19.2.14",
+    "eslint": "^8.19.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "nitrogen": "^0.35.4",
+    "prettier": "^3.3.3",
     "react": "19.2.5",
     "react-native": "0.84.1",
-    "react-native-builder-bob": "^0.37.0",
-    "react-native-nitro-modules": "^0.35.0",
+    "react-native-builder-bob": "^0.41.0",
+    "react-native-nitro-modules": "^0.35.4",
     "typescript": "^5.8.0"
   },
   "peerDependencies": {
@@ -141,6 +147,6 @@
     ]
   },
   "dependencies": {
-    "eventemitter3": "^5.0.1"
+    "eventemitter3": "^5.0.4"
   }
 }

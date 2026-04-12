@@ -4,7 +4,7 @@ const root = path.resolve(__dirname, '..')
 
 module.exports = {
   dependencies: {
-    'react-native-nitro-bg-timer': {
+    'react-native-nitro-bg-timer-plus': {
       root,
     },
   },

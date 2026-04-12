@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Project renamed to `react-native-nitro-bg-timer-plus`** — this project is now an independent fork of [tconns/react-native-nitro-bg-timer](https://github.com/tconns/react-native-nitro-bg-timer), maintained by Marco Crupi. Previous history is preserved.
 - Upgraded Nitro Modules from 0.29.3 to 0.35.0
 - Upgraded React Native to 0.84.1
 - Updated `moduleResolution` to `Bundler` in tsconfig.json
@@ -59,6 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TypeScript API wrapper with callback management
 - Full API documentation and usage examples in README
 
-[Unreleased]: https://github.com/marcocrupi/react-native-nitro-bg-timer/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/marcocrupi/react-native-nitro-bg-timer/compare/v0.0.1...v0.1.0
-[0.0.1]: https://github.com/marcocrupi/react-native-nitro-bg-timer/releases/tag/v0.0.1
+[Unreleased]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.0.1...v0.1.0
+[0.0.1]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/releases/tag/v0.0.1
