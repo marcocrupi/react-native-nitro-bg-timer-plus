@@ -6,18 +6,30 @@ import android.os.HandlerThread
 import android.os.PowerManager
 import android.util.Log
 import com.facebook.proguard.annotations.DoNotStrip
+import com.facebook.react.bridge.LifecycleEventListener
+import com.facebook.react.bridge.ReactApplicationContext
 import com.margelo.nitro.NitroModules
 import java.util.concurrent.ConcurrentHashMap
 
 @DoNotStrip
-class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
-  private val context = NitroModules.applicationContext
-    ?: throw IllegalStateException("NitroModules.applicationContext is null")
+class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventListener {
+  // Captured at construction time. Must be a non-null `ReactApplicationContext`
+  // because the class registers itself as a `LifecycleEventListener`. Validated
+  // via `as?` + throw so we fail fast if Nitro ever starts handing us a plain
+  // `Context` — a programmer error we want to surface immediately.
+  private val reactContext: ReactApplicationContext = run {
+    val ctx = NitroModules.applicationContext
+    ctx as? ReactApplicationContext
+      ?: throw IllegalStateException(
+        "NitroBackgroundTimer requires NitroModules.applicationContext to be a ReactApplicationContext; " +
+          "is Nitro installed and initialized before the first timer call?"
+      )
+  }
 
   private val timerThread = HandlerThread("NitroBgTimer-Worker").apply { start() }
   private val handler = Handler(timerThread.looper)
 
-  private val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
+  private val powerManager = reactContext.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
 
   @SuppressLint("InvalidWakeLockTag")
   private val wakeLock: PowerManager.WakeLock =
@@ -34,9 +46,21 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
   private var isDisposed: Boolean = false
 
   init {
-    NitroBackgroundTimerInstanceHolder.setInstance(this)
     if (BuildConfig.DEBUG) {
       Log.d(TAG, "HandlerThread started (${timerThread.name})")
+    }
+    // Register for Activity-destroy cleanup. Works in both Bridge and Bridgeless
+    // modes because `addLifecycleEventListener` is on the base `ReactContext`
+    // class, not on the TurboModule registry. `CopyOnWriteArraySet` under the
+    // hood ([ReactContext.java:47]) makes registration thread-safe and tolerant
+    // of removal-during-iteration from inside `onHostDestroy`.
+    try {
+      reactContext.addLifecycleEventListener(this)
+      if (BuildConfig.DEBUG) {
+        Log.d(TAG, "LifecycleEventListener registered on ReactContext")
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "Failed to register LifecycleEventListener; Activity-destroy cleanup will not fire", e)
     }
   }
 
@@ -66,20 +90,20 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
    * deep sleep), subsequent ticks may be delayed indefinitely — exactly the
    * bug this library is meant to prevent.
    *
-   * Instead, wake lock lifetime is managed **explicitly** via five cleanup paths:
+   * Instead, wake lock lifetime is managed **explicitly** via these cleanup paths:
    *
    *  1. `clearTimeout` / `clearInterval` / runnable natural completion
    *     → `releaseWakeLockIfNeeded()` (count-via-map)
    *  2. `dispose()` → `cleanupAll()` → explicit release
-   *  3. `NitroBackgroundTimerLifecycleModule.invalidate()` (bundle reload /
-   *     bridge teardown) → `InstanceHolder.disposeIfActive()`
-   *  4. `NitroBackgroundTimerLifecycleModule.onHostDestroy()` (Activity destroy)
-   *     → `InstanceHolder.disposeIfActive()`
-   *  5. `finalize()` (GC fallback) → `cleanupAll()`
+   *  3. `onHostDestroy()` (Activity destroy, via `LifecycleEventListener`)
+   *     → `dispose()` → `cleanupAll()`
+   *  4. `finalize()` (GC fallback) → `cleanupAll()`
    *
    * The only residual gap is "user callback that never returns" (e.g. a JS
    * deadlock holding a timer entry in the map). That is a consumer bug we
-   * cannot protect against at the library level.
+   * cannot protect against at the library level. In dev mode, Fast Refresh
+   * (bundle reload without Activity destroy) also relies on `finalize()` —
+   * non-deterministic, but acceptable as a dev-only limitation.
    *
    * Must be called from the worker thread.
    */
@@ -209,7 +233,21 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
     }
   }
 
-  // --- Dispose (manual, JS-triggered; also invoked by companion lifecycle module) ---
+  // --- LifecycleEventListener ---
+  override fun onHostResume() {
+    // no-op
+  }
+
+  override fun onHostPause() {
+    // no-op
+  }
+
+  override fun onHostDestroy() {
+    Log.i(TAG, "onHostDestroy triggered cleanup")
+    dispose()
+  }
+
+  // --- Dispose (manual, JS-triggered; also invoked by onHostDestroy above) ---
   @DoNotStrip
   override fun dispose() {
     if (isDisposed) {
@@ -218,6 +256,18 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
       return
     }
     isDisposed = true
+
+    // Unregister from ReactContext so we don't leak a strong reference through
+    // mLifecycleEventListeners. Safe to call from inside onHostDestroy thanks
+    // to CopyOnWriteArraySet — removal-during-iteration is allowed and does
+    // not throw. Safe to call on a dead ReactContext (list.remove is just a
+    // list operation).
+    try {
+      reactContext.removeLifecycleEventListener(this)
+    } catch (e: Exception) {
+      Log.w(TAG, "Failed to remove LifecycleEventListener", e)
+    }
+
     // Post cleanup on the worker thread so any pending messages are drained in order,
     // then quit the looper from within. We cannot simply call quitSafely() from an
     // arbitrary thread and expect the last pending message to observe isDisposed.
@@ -258,6 +308,13 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
   // --- Cleanup fallback via GC ---
   protected fun finalize() {
     if (!isDisposed) {
+      // Best-effort remove from the ReactContext listener list. If the context
+      // has already been torn down, this is a harmless list.remove no-op.
+      try {
+        reactContext.removeLifecycleEventListener(this)
+      } catch (_: Throwable) {
+        // finalize must never throw
+      }
       try {
         cleanupAll()
       } catch (_: Throwable) {

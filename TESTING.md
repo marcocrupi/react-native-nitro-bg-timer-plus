@@ -2,8 +2,8 @@
 
 This checklist must be executed on a real device before publishing a new
 version of the library. The unit tests cover the JS layer in isolation; the
-native lifecycle, wake lock behaviour, threading, and bundle reload cleanup
-all require manual verification on each platform.
+native lifecycle, wake lock behaviour, threading, and Activity-destroy
+cleanup all require manual verification on each platform.
 
 ## Setup
 
@@ -13,6 +13,13 @@ all require manual verification on each platform.
    iOS: trusted developer profile)
 
 ## Android tests
+
+> **Note on Fast Refresh / dev bundle reload**: automatic cleanup on
+> Fast Refresh (bundle reload without Activity destroy) is **not**
+> provided. In dev mode, call `BackgroundTimer.dispose()` manually before
+> reloading, or rely on Kotlin `finalize()` which is non-deterministic.
+> Activity destroy (the production teardown path) is fully covered via
+> the `LifecycleEventListener` hook.
 
 ### A1 — Basic timer functionality
 
@@ -37,21 +44,31 @@ all require manual verification on each platform.
 - [ ] After dispose, calling `clearTimeout` is silent (no throw)
 - [ ] Calling `dispose()` twice is silent
 
-### A4 — Bundle reload (Fast Refresh) cleanup
+### A4 — Activity destroy cleanup (production teardown path)
+
+This is the primary automatic cleanup path on Android. It fires when the
+host Activity is destroyed, which covers user-initiated quit, system kill
+under memory pressure, and process termination.
+
+- [ ] Start a `setInterval` (e.g. 30s)
+- [ ] Swipe the app away from the recents screen (or force-stop from
+      Android system settings)
+- [ ] Reopen the app, inspect logcat for
+      `NitroBgTimer: onHostDestroy triggered cleanup` (logged during the
+      previous destroy cycle)
+- [ ] Run `adb shell dumpsys power | grep -i nitrobgtimer` — verify no
+      wake lock held
+
+### A5 — Explicit dispose() cleans up on Fast Refresh
+
+Because automatic Fast Refresh cleanup is not provided (see note at top),
+verify that manually calling `dispose()` before reload works as expected.
 
 - [ ] Start a `setInterval` (60s)
+- [ ] Call `BackgroundTimer.dispose()` from a dev button
 - [ ] Trigger Fast Refresh (R+R in emulator or "Reload" from dev menu)
 - [ ] Run `adb shell dumpsys power | grep -i nitrobgtimer` — verify no
       wake lock held
-- [ ] Check logcat for `NitroBgTimer: Companion module invalidate() triggered cleanup`
-
-### A5 — Activity destroy cleanup
-
-- [ ] Start a `setInterval`
-- [ ] Force-stop the app from Android system settings
-- [ ] Reopen the app and check logcat for
-      `NitroBgTimer: onHostDestroy triggered cleanup` (logged during the
-      previous destroy)
 
 ### A6 — SecurityException graceful fallback
 

@@ -162,24 +162,37 @@ BackgroundTimer.dispose()
 
 The library handles native resource cleanup through a three-layer defense:
 
-1. **Automatic native lifecycle hooks.** On Android, a companion module
-   registered via React Native's package system listens for `invalidate()`
-   (bundle reload / Fast Refresh / bridge teardown) and `onHostDestroy()`
-   (Activity destroy) and disposes the live timer instance deterministically.
-   On iOS, the JSI runtime teardown releases the `HybridObject`, whose
-   `deinit` invalidates all pending `Timer`s and ends the background task.
+1. **Automatic native lifecycle hooks.**
+   - On **Android**, the `HybridObject` registers itself as a
+     `LifecycleEventListener` on the active `ReactApplicationContext`. When
+     the host Activity is destroyed, `onHostDestroy` fires and the timer
+     disposes itself deterministically, releasing the wake lock and
+     tearing down the worker thread.
+   - On **iOS**, JSI runtime teardown releases the `HybridObject`, whose
+     `deinit` invalidates all pending `Timer`s and ends the background task.
 2. **Explicit `dispose()`.** Call `BackgroundTimer.dispose()` when you want
    deterministic teardown earlier than the lifecycle hooks — for example,
    inside a feature module's shutdown path, or before navigating away from
    a long-lived screen that owns the timer.
-3. **GC fallback.** If neither of the above runs (rare, but possible if the
-   host tears down in an unusual way), Kotlin `finalize()` and Swift `deinit`
-   act as a safety net and release the wake lock / background task when the
-   garbage collector reclaims the instance.
+3. **GC fallback.** If neither of the above runs, Kotlin `finalize()` and
+   Swift `deinit` act as a safety net and release the wake lock / background
+   task when the garbage collector reclaims the instance.
 
-In normal usage, **you do not need to call `dispose()` manually** — the
-hooks above cover bundle reload and app destroy. Call it only when you have
-a concrete reason to force early release.
+In normal production usage, **you do not need to call `dispose()`
+manually** — Activity destroy covers app shutdown. Call it only when you
+have a concrete reason to force early release.
+
+### Dev-mode caveat: Fast Refresh / bundle reload
+
+In development, Fast Refresh tears down the JS runtime but keeps the host
+Activity alive, so `onHostDestroy` does **not** fire. In that case the old
+timer instance relies on Kotlin `finalize()` / Swift `deinit` to release
+its wake lock, which is non-deterministic and may leave the lock held
+briefly across a reload. If you are debugging long-running background
+timers during Fast Refresh cycles and notice a leaked wake lock, call
+`BackgroundTimer.dispose()` explicitly from your code before triggering
+the reload — or just rely on process restart to reset state. This
+limitation does not affect production builds.
 
 ## Real-world Examples
 
@@ -424,12 +437,14 @@ BackgroundTimer.setInterval(() => {
 
 ### Android Implementation Details
 
-- Background execution via `PowerManager.PARTIAL_WAKE_LOCK` (non-reference-counted,
-  bounded-duration, per-call timeout).
+- Background execution via `PowerManager.PARTIAL_WAKE_LOCK`
+  (non-reference-counted, held explicitly for the lifetime of all active
+  timers).
 - All state mutations serialized on a dedicated `HandlerThread` to eliminate
   race conditions between `setTimeout`/`clearTimeout` concurrent callers.
-- Companion React Native module disposes the timer deterministically on
-  bundle reload (`invalidate()`) and Activity destroy (`onHostDestroy`).
+- The `HybridObject` registers itself as a `LifecycleEventListener` on the
+  `ReactApplicationContext`, so Activity destroy triggers deterministic
+  cleanup in both Bridge and Bridgeless modes.
 - Graceful fallback: if `WAKE_LOCK` permission is missing or revoked, the
   module logs a warning and runs timers without the wake lock instead of
   crashing.
