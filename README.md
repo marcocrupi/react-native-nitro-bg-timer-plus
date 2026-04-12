@@ -198,6 +198,120 @@ timers during Fast Refresh cycles and notice a leaked wake lock, call
 the reload — or just rely on process restart to reset state. This
 limitation does not affect production builds.
 
+## Background Mode (Android)
+
+On Android, background processes are throttled by the `bg_non_interactive`
+cgroup, which limits CPU quota and causes `setInterval` / `setTimeout`
+ticks to drift by roughly 10% even with a partial wake lock and a
+foreground-priority worker thread. To achieve absolute timer accuracy in
+background, this library can run a short **foreground service** that
+keeps the host process at foreground scheduling priority while timers
+are active.
+
+The foreground service activates in two modes:
+
+**Implicit (default)** — when the consumer does not call any background
+mode API, the service is started automatically on the first active timer
+and stopped when the last timer completes. The consumer sees a persistent
+notification in the notification shade only while a timer is running.
+Existing code written for older versions of this library continues to
+work unchanged.
+
+**Explicit (recommended for long sessions)** — for known critical
+sessions like a workout, a recording, or a GPS tracking session, call
+`startBackgroundMode()` at the start and `stopBackgroundMode()` at the
+end. The notification stays stable for the entire session instead of
+appearing and disappearing around individual timers.
+
+```ts
+import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
+
+// At the start of a workout session
+BackgroundTimer.startBackgroundMode()
+
+// Schedule timers normally during the session
+const restTimerId = BackgroundTimer.setTimeout(() => {
+  // rest period over
+}, 90_000)
+
+// At the end of the session
+BackgroundTimer.stopBackgroundMode()
+```
+
+Both methods are idempotent and are **no-ops on iOS** — iOS handles
+background timer accuracy natively through `beginBackgroundTask`, and the
+main run loop keeps timers firing for as long as the background task is
+held. You can write cross-platform code that calls these methods on both
+platforms without a platform branch.
+
+### Customizing the notification
+
+Call `configure()` **before** the first timer or before
+`startBackgroundMode()` to customize the notification appearance. All
+fields are optional — omitted fields fall back to sensible generic
+defaults.
+
+```ts
+BackgroundTimer.configure({
+  notification: {
+    title: 'Workout in progress',
+    text: 'Tracking your rest timers',
+    channelId: 'my_app_workout_channel',
+    channelName: 'Workout Tracking',
+    iconResourceName: 'ic_workout',
+  },
+})
+```
+
+`configure()` throws if called while the foreground service is already
+active. Call it early in your app lifecycle (e.g. at startup or right
+before the user enters the critical screen), never mid-session.
+
+### Required permissions
+
+The library's own manifest declares everything the foreground service
+needs — you do not have to add permissions to your app's manifest for
+this to work:
+
+- `android.permission.WAKE_LOCK`
+- `android.permission.FOREGROUND_SERVICE`
+- `android.permission.FOREGROUND_SERVICE_SHORT_SERVICE` (API 34+)
+- `android.permission.POST_NOTIFICATIONS` (API 33+)
+
+`POST_NOTIFICATIONS` is a **runtime permission** starting on Android 13,
+and your app must request it from the user before the foreground service
+notification can appear. The library intentionally does not request this
+permission for you — most apps already have a notification permission
+flow as part of their onboarding, and silently triggering the system
+dialog from a timer library would be surprising.
+
+If the permission is denied, the foreground service still starts but the
+notification is not shown, and on Android 14+ the system may terminate
+the service within ~10 seconds. Request the permission yourself:
+
+```ts
+import { PermissionsAndroid, Platform } from 'react-native'
+
+async function ensureNotificationPermission() {
+  if (Platform.OS !== 'android') return
+  if (typeof Platform.Version === 'number' && Platform.Version >= 33) {
+    await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+    )
+  }
+}
+```
+
+### Limitations
+
+- The service uses the `shortService` foreground type introduced in
+  Android 14. Cumulative duration is capped at **3 hours** per the
+  platform contract. For timers that need to run longer than 3 hours,
+  use `AlarmManager` or `WorkManager` at the application level — they
+  are the correct primitives for long-running scheduled work.
+- iOS is unaffected: `startBackgroundMode`, `stopBackgroundMode`, and
+  `configure` are no-ops on iOS.
+
 ## Real-world Examples
 
 ### Basic Timer Usage
