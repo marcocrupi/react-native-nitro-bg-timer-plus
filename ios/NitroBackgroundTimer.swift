@@ -15,16 +15,44 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
   private var timeoutTimers: [Int: Timer] = [:]
   private var intervalTimers: [Int: Timer] = [:]
 
-  // MARK: - Background task helpers
+  // Mutated and read exclusively from the main queue to avoid cross-thread races.
+  private var isDisposed: Bool = false
+
+  private static let logTag = "[NitroBgTimer]"
+
+  // MARK: - Telemetry
+  private func logInfo(_ message: String) {
+    print("\(Self.logTag) info: \(message)")
+  }
+
+  private func logWarn(_ message: String) {
+    print("\(Self.logTag) warn: \(message)")
+  }
+
+  private func logDebug(_ message: String) {
+    #if DEBUG
+    print("\(Self.logTag) debug: \(message)")
+    #endif
+  }
+
+  // MARK: - Background task helpers (always called on main queue)
   private func acquireBackgroundTask() {
     guard bgTask == .invalid else { return }
 
-    bgTask = UIApplication.shared.beginBackgroundTask(withName: "NitroBackgroundTimer") { [weak self] in
-      self?.releaseBackgroundTask()
+    bgTask = UIApplication.shared.beginBackgroundTask(withName: "NitroBgTimer") { [weak self] in
+      // iOS may invoke the expiration handler from an arbitrary thread shortly before
+      // killing the process with 0x8badf00d. Bounce to main to safely mutate state.
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.logWarn("Background task expiration handler fired — cleaning up")
+        self.cleanupAll()
+      }
     }
 
     if bgTask == .invalid {
-      print("[NitroBackgroundTimer] Warning: Failed to acquire background task")
+      logWarn("Failed to acquire background task")
+    } else {
+      logDebug("Background task acquired (activeTimers=\(timeoutTimers.count + intervalTimers.count))")
     }
   }
 
@@ -36,9 +64,18 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
   private func releaseBackgroundTask() {
     guard bgTask != .invalid else { return }
-
     UIApplication.shared.endBackgroundTask(bgTask)
     bgTask = .invalid
+    logDebug("Background task released")
+  }
+
+  // MARK: - Centralized cleanup (must run on main queue)
+  private func cleanupAll() {
+    timeoutTimers.values.forEach { $0.invalidate() }
+    intervalTimers.values.forEach { $0.invalidate() }
+    timeoutTimers.removeAll()
+    intervalTimers.removeAll()
+    releaseBackgroundTask()
   }
 
   // MARK: - Timeout
@@ -47,6 +84,10 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
     DispatchQueue.main.async { [weak self] in
       guard let self = self else { return }
+      if self.isDisposed {
+        self.logWarn("setTimeout called on disposed instance, ignoring")
+        return
+      }
 
       // Clear existing timer with same ID (inline to avoid async race)
       if let existing = self.timeoutTimers[intId] {
@@ -59,6 +100,16 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
       let timer = Timer(timeInterval: duration / 1000.0, repeats: false) { [weak self] _ in
         guard let self = self else { return }
 
+        // Note on callback exception handling (asymmetric with Android):
+        // The Android implementation wraps `callback(id)` in a try/catch to log
+        // and swallow exceptions thrown by the user callback. The Swift side
+        // cannot easily do the same because `callback` is a non-throwing
+        // `(Double) -> Void` and Swift does not support catching C++/Obj-C
+        // exceptions without an Obj-C++ bridge helper. We rely on Nitro's
+        // `AsyncJSCallback` dispatcher to catch JS-level exceptions at the
+        // bridge boundary (the callback is dispatched async via CallInvoker to
+        // the JS thread). Tracked as a future improvement: add an explicit
+        // Obj-C++ exception barrier for stricter parity with Android.
         callback(id)
 
         self.timeoutTimers.removeValue(forKey: intId)
@@ -75,6 +126,7 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
     DispatchQueue.main.async { [weak self] in
       guard let self = self else { return }
+      if self.isDisposed { return }
 
       if let timer = self.timeoutTimers[intId] {
         timer.invalidate()
@@ -90,8 +142,11 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
     DispatchQueue.main.async { [weak self] in
       guard let self = self else { return }
+      if self.isDisposed {
+        self.logWarn("setInterval called on disposed instance, ignoring")
+        return
+      }
 
-      // Clear existing timer with same ID (inline to avoid async race)
       if let existing = self.intervalTimers[intId] {
         existing.invalidate()
         self.intervalTimers.removeValue(forKey: intId)
@@ -101,8 +156,12 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
       let timer = Timer(timeInterval: interval / 1000.0, repeats: true) { [weak self] _ in
         guard let self = self else { return }
+        // If the interval has been cleared while the fire was pending, bail out.
         guard self.intervalTimers[intId] != nil else { return }
 
+        // See the setTimeout callback-invocation comment for the rationale on
+        // why this call is not wrapped in a try/catch (Swift-side asymmetry
+        // with Android, deferred to a future Obj-C++ exception barrier).
         callback(id)
       }
       RunLoop.main.add(timer, forMode: .common)
@@ -116,6 +175,7 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
     DispatchQueue.main.async { [weak self] in
       guard let self = self else { return }
+      if self.isDisposed { return }
 
       if let timer = self.intervalTimers[intId] {
         timer.invalidate()
@@ -125,12 +185,42 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
     }
   }
 
+  // MARK: - Dispose (manual, JS-triggered)
+  //
+  // Overrides the default no-op from `HybridObject`. After `dispose()` is invoked
+  // the instance is permanently unusable — subsequent calls to the timer API are
+  // silently ignored (with a warning log) on this native side, while the JS wrapper
+  // enforces the error surface for `setTimeout`/`setInterval`.
+  func dispose() {
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self else { return }
+      if self.isDisposed {
+        self.logWarn("dispose() called on already-disposed instance, ignoring")
+        return
+      }
+      self.logInfo("dispose() triggered cleanup")
+      self.isDisposed = true
+      self.cleanupAll()
+    }
+  }
+
+  // MARK: - Deinit (GC fallback when JS never calls dispose())
   deinit {
     // Copy out all values so the closure does not capture self (refcount 0 during deinit).
     // Dictionary is a value type in Swift, so this is a safe copy.
     let timeouts = timeoutTimers
     let intervals = intervalTimers
     let task = bgTask
+    let alreadyDisposed = isDisposed
+
+    #if DEBUG
+    print("\(Self.logTag) debug: deinit triggered (alreadyDisposed=\(alreadyDisposed))")
+    #endif
+
+    if alreadyDisposed {
+      // cleanupAll() has already run via dispose() — nothing to do.
+      return
+    }
 
     let doCleanup = {
       timeouts.values.forEach { $0.invalidate() }
