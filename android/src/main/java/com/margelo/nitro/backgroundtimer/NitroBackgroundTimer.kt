@@ -10,6 +10,7 @@ import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.ReactApplicationContext
 import com.margelo.nitro.NitroModules
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 @DoNotStrip
 class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventListener {
@@ -42,8 +43,13 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   private val timeoutRunnables = ConcurrentHashMap<Int, Runnable>()
   private val intervalRunnables = ConcurrentHashMap<Int, Runnable>()
 
-  @Volatile
-  private var isDisposed: Boolean = false
+  // AtomicBoolean (not `@Volatile Boolean`) because `dispose()` uses
+  // `compareAndSet(false, true)` to ensure exactly one thread wins the
+  // dispose race. Two concurrent callers — e.g. user JS calling
+  // `BackgroundTimer.dispose()` while `onHostDestroy` fires from the UI
+  // thread — would otherwise both read false, both proceed past the guard,
+  // and both reach the cleanup path.
+  private val isDisposed = AtomicBoolean(false)
 
   init {
     if (BuildConfig.DEBUG) {
@@ -155,7 +161,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
 
   // --- Timeout ---
   override fun setTimeout(id: Double, duration: Double, callback: (Double) -> Unit) {
-    if (isDisposed) {
+    if (isDisposed.get()) {
       Log.w(TAG, "setTimeout called on disposed instance, ignoring")
       return
     }
@@ -182,7 +188,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   }
 
   override fun clearTimeout(id: Double) {
-    if (isDisposed) return
+    if (isDisposed.get()) return
     handler.post {
       val intId = id.toInt()
       timeoutRunnables[intId]?.let { handler.removeCallbacks(it) }
@@ -193,7 +199,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
 
   // --- Interval ---
   override fun setInterval(id: Double, interval: Double, callback: (Double) -> Unit) {
-    if (isDisposed) {
+    if (isDisposed.get()) {
       Log.w(TAG, "setInterval called on disposed instance, ignoring")
       return
     }
@@ -212,7 +218,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
           }
           // Only reschedule if this interval is still registered and not disposed.
           // Wake lock stays held across ticks — no "renewal" needed (see acquireWakeLock() Kdoc).
-          if (intervalRunnables.containsKey(intId) && !isDisposed) {
+          if (intervalRunnables.containsKey(intId) && !isDisposed.get()) {
             handler.postDelayed(this, interval.toLong())
           }
         }
@@ -224,7 +230,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   }
 
   override fun clearInterval(id: Double) {
-    if (isDisposed) return
+    if (isDisposed.get()) return
     handler.post {
       val intId = id.toInt()
       intervalRunnables[intId]?.let { handler.removeCallbacks(it) }
@@ -250,12 +256,17 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   // --- Dispose (manual, JS-triggered; also invoked by onHostDestroy above) ---
   @DoNotStrip
   override fun dispose() {
-    if (isDisposed) {
+    // Atomic guard: exactly one caller wins the CAS; any racing caller (e.g.
+    // user JS `dispose()` vs `onHostDestroy` from the UI thread) takes the
+    // early-return path. Without this, the second caller would re-enter the
+    // cleanup path and its `handler.post` could fall into the direct-cleanup
+    // fallback on the caller thread, violating the worker-thread-only
+    // invariant documented on `acquireWakeLock()`.
+    if (!isDisposed.compareAndSet(false, true)) {
       Log.w(TAG, "dispose() called on already-disposed instance, ignoring")
       super.dispose()
       return
     }
-    isDisposed = true
 
     // Unregister from ReactContext so we don't leak a strong reference through
     // mLifecycleEventListeners. Safe to call from inside onHostDestroy thanks
@@ -307,7 +318,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
 
   // --- Cleanup fallback via GC ---
   protected fun finalize() {
-    if (!isDisposed) {
+    if (!isDisposed.get()) {
       // Best-effort remove from the ReactContext listener list. If the context
       // has already been torn down, this is a harmless list.remove no-op.
       try {
