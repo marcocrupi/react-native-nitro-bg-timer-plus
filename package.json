@@ -151,5 +151,8 @@
   },
   "dependencies": {
     "eventemitter3": "^5.0.4"
+  },
+  "resolutions": {
+    "js-yaml@^4.1.0": "^4.1.1"
   }
 }
