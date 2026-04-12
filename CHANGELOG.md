@@ -37,7 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fixed iOS timer race condition (main-thread dispatch, same-ID timer overwrites)
+- Fixed critical iOS bug where `setInterval` and `setTimeout` would not fire on
+  physical devices. The previous `serialQueue` + nested `DispatchQueue.main.async`
+  double-dispatch caused the unconditional `clearTimeout`/`clearInterval` call to
+  race against timer creation, invalidating timers immediately after scheduling.
+  All timer operations now dispatch directly to the main queue with inline,
+  conditional cleanup. Addresses upstream issues
+  [tconns/react-native-nitro-bg-timer#2](https://github.com/tconns/react-native-nitro-bg-timer/issues/2)
+  and [#5](https://github.com/tconns/react-native-nitro-bg-timer/issues/5).
 - Fixed HookTest render error in example app
 - Fixed native bugs surfaced during React Native 0.84.1 upgrade
 - Fixed broken `yarn specs` script (was invoking `typescript` as a shell command; now uses `tsc && nitrogen`)
