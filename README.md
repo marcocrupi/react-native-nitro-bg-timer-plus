@@ -16,10 +16,11 @@ This module provides high-performance background timer functionality for React N
 - 📱 Cross-platform support (iOS & Android)
 - 🚀 Zero-bridge overhead with direct native calls
 - 🛡️ Three-layer cleanup defense: explicit `dispose()`, automatic Activity lifecycle hooks, GC fallback
+- 🎯 Absolute accuracy in background on Android via opt-in foreground service (`startBackgroundMode` / `stopBackgroundMode`)
+- 🔔 Automatic foreground service fallback for transparent precision without extra setup
 - 🔒 Thread-safe by design — all native state serialized on a dedicated worker thread (Android) or main queue (iOS)
-- 🪵 Structured debug telemetry for post-mortem analysis with Sentry / Crashlytics
 - 🛡️ Graceful fallback if `WAKE_LOCK` permission is missing — no crash, just a warning
-- ✅ 29 unit tests + manual release checklist
+- ✅ 39 unit tests + manual release checklist
 
 ## Requirements
 
@@ -35,6 +36,31 @@ npm install react-native-nitro-bg-timer-plus react-native-nitro-modules
 yarn add react-native-nitro-bg-timer-plus react-native-nitro-modules
 ```
 
+## Upgrading from 0.2.0
+
+If you are upgrading an existing project from `0.2.0`, your code
+continues to work without modification — no breaking API changes. You
+will, however, notice two new runtime behaviors:
+
+1. **A persistent notification appears while timers are active in
+   background.** This is the foreground service that makes background
+   timer accuracy reliable. See
+   [Background Mode (Android)](#background-mode-android).
+
+2. **On Android 13+, you must request the `POST_NOTIFICATIONS`
+   runtime permission** for the notification to appear. Without it,
+   the foreground service still starts, but on Android 14+ the system
+   may terminate it within ~10 seconds. Add a permission request to
+   your app's onboarding flow — a ready-to-paste snippet is in the
+   [Required permissions](#required-permissions) section.
+
+If you prefer the 0.2.0 behavior (no foreground service, ~10% drift
+in background) there is no opt-out: the foreground service is the
+mechanism that eliminates the drift, and there is no way to get
+absolute accuracy without it on Android. If your use case tolerates
+the 10% drift, the simplest migration is to pin your dependency
+to `0.2.x`.
+
 ## Platform Configuration
 
 ### iOS
@@ -46,16 +72,31 @@ extra runtime when the app moves to background. No entries in
 
 ### Android
 
-No special configuration required. The library declares
-`android.permission.WAKE_LOCK` in its own manifest, which is automatically
-merged into your app at build time. The module acquires a
-`PARTIAL_WAKE_LOCK` (non-reference-counted, bounded-duration) only while
-timers are active, and releases it as soon as the last timer fires or is
-cleared.
+The library's manifest declares all the permissions it needs, and they
+are merged automatically into your app at build time. You do not need
+to add anything to your own `AndroidManifest.xml`:
 
-If `WAKE_LOCK` has been explicitly removed from the merged manifest (for
-example via `tools:node="remove"`), the module logs a warning and runs
-timers via the handler thread without a wake lock — no crash.
+- `android.permission.WAKE_LOCK`
+- `android.permission.FOREGROUND_SERVICE`
+- `android.permission.FOREGROUND_SERVICE_SHORT_SERVICE` (Android 14+)
+- `android.permission.POST_NOTIFICATIONS` (Android 13+)
+
+There is, however, **one thing you must do yourself** if your app
+targets Android 13 or later: request the `POST_NOTIFICATIONS` runtime
+permission from the user as part of your onboarding flow. Without it,
+the foreground service still starts, but the persistent notification
+is silently hidden, and on Android 14+ the system may terminate the
+service within ~10 seconds.
+
+See the [Background Mode (Android)](#background-mode-android) section
+below for the full picture of what the foreground service does, when
+it activates, and how to customize it. If you are upgrading from
+`0.2.0`, also read the [Upgrading from 0.2.0](#upgrading-from-020)
+section.
+
+If `WAKE_LOCK` has been explicitly removed from the merged manifest
+(for example via `tools:node="remove"`), the module logs a warning and
+runs timers via the handler thread without a wake lock — no crash.
 
 ## Quick Usage
 
@@ -78,6 +119,31 @@ const intervalId = BackgroundTimer.setInterval(() => {
 // Clear interval when done
 BackgroundTimer.clearInterval(intervalId)
 ```
+
+### Important — Android background behavior
+
+When a timer is active and your app moves to background, this library
+automatically starts a short foreground service that keeps your host
+process at foreground scheduling priority. This is what makes background
+timer accuracy reliable on Android (without this, `setInterval` drifts
+by roughly 10% in background).
+
+The side effect is that your users will see a **persistent notification**
+in the notification shade for as long as a timer is running. The
+notification appears automatically on the first active timer and
+disappears when the last timer completes. You can customize its title,
+text, and icon via `BackgroundTimer.configure()`, and you can control
+its lifecycle explicitly with `startBackgroundMode()` /
+`stopBackgroundMode()` to avoid "blinking" if your app creates many
+short consecutive timers.
+
+This behavior is **Android-only**. iOS achieves background accuracy
+natively through `beginBackgroundTask` and does not need a foreground
+service.
+
+See the [Background Mode (Android)](#background-mode-android) section
+for details, including how to request the required
+`POST_NOTIFICATIONS` runtime permission.
 
 ## API Reference
 
@@ -583,12 +649,21 @@ BackgroundTimer.setInterval(() => {
 
 #### Timers stop working in background (Android)
 
-- The `WAKE_LOCK` permission is declared by the library manifest and merged
-  automatically — no action needed unless you have explicitly removed it.
-- Request battery optimization exemption for your app (aggressive OEM battery
-  savers may still kill background tasks regardless of wake locks).
-- For very long-running background work, consider combining this library
-  with a foreground service.
+- The `WAKE_LOCK`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SHORT_SERVICE`,
+  and `POST_NOTIFICATIONS` permissions are all declared by the library
+  manifest and merged automatically — no action needed unless you have
+  explicitly removed them.
+- On Android 13+, verify that your app has requested the
+  `POST_NOTIFICATIONS` runtime permission. If the permission is denied,
+  the foreground service notification is hidden, and on Android 14+ the
+  system may terminate the service within ~10 seconds.
+- Aggressive OEM battery savers (Xiaomi, Huawei, Oppo, etc.) may still
+  kill foreground services regardless of the above. Ask the user to
+  whitelist your app in the device battery optimization settings.
+- For timers longer than 3 hours of cumulative runtime, the `shortService`
+  foreground type reaches its platform-imposed duration limit and the
+  service is terminated by the system. Use `AlarmManager` or `WorkManager`
+  at the application level for long-running scheduled work.
 
 #### Timers not firing on iOS
 
