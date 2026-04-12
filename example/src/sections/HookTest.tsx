@@ -27,7 +27,7 @@ export function HookTest() {
         <View
           style={[
             styles.indicator,
-            { backgroundColor: isRunning ? '#27ae60' : '#ccc' },
+            isRunning ? styles.indicatorActive : styles.indicatorInactive,
           ]}
         />
         <Text style={styles.statusText}>
@@ -84,6 +84,8 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 5,
   },
+  indicatorActive: { backgroundColor: '#27ae60' },
+  indicatorInactive: { backgroundColor: '#ccc' },
   statusText: {
     fontSize: 13,
     color: '#666',

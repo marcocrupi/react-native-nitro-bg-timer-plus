@@ -94,7 +94,7 @@ export function BackgroundTest() {
           <Text
             style={[
               styles.statValue,
-              { color: nativeMatch ? '#27ae60' : '#e74c3c' },
+              nativeMatch ? styles.statValueMatch : styles.statValueMismatch,
             ]}
           >
             {nativeTicks}
@@ -103,7 +103,7 @@ export function BackgroundTest() {
         {showJs && (
           <View style={styles.stat}>
             <Text style={styles.statLabel}>JS</Text>
-            <Text style={[styles.statValue, { color: '#f39c12' }]}>
+            <Text style={[styles.statValue, styles.statValueJs]}>
               {jsTicks}
             </Text>
           </View>
@@ -118,7 +118,9 @@ export function BackgroundTest() {
         <Text
           style={[
             styles.matchIndicator,
-            { backgroundColor: nativeMatch ? '#27ae60' : '#e74c3c' },
+            nativeMatch
+              ? styles.matchIndicatorMatch
+              : styles.matchIndicatorMismatch,
           ]}
         >
           {nativeMatch ? 'MATCH' : 'MISMATCH'}
@@ -180,6 +182,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1a1a2e',
   },
+  statValueMatch: { color: '#27ae60' },
+  statValueMismatch: { color: '#e74c3c' },
+  statValueJs: { color: '#f39c12' },
   matchIndicator: {
     textAlign: 'center',
     color: '#fff',
@@ -190,6 +195,8 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     overflow: 'hidden',
   },
+  matchIndicatorMatch: { backgroundColor: '#27ae60' },
+  matchIndicatorMismatch: { backgroundColor: '#e74c3c' },
   row: {
     flexDirection: 'row',
     gap: 8,

@@ -79,7 +79,7 @@ export function ConcurrentTimers() {
             key={i}
             style={[
               styles.timerBox,
-              { opacity: t.id !== null || !running ? 1 : 0.4 },
+              t.id === null && running && styles.timerBoxDimmed,
             ]}
           >
             <Text style={styles.timerInterval}>{t.interval}ms</Text>
@@ -87,7 +87,7 @@ export function ConcurrentTimers() {
             <View
               style={[
                 styles.dot,
-                { backgroundColor: t.id !== null ? '#27ae60' : '#ccc' },
+                t.id !== null ? styles.dotActive : styles.dotInactive,
               ]}
             />
           </View>
@@ -135,6 +135,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8f8f8',
     borderRadius: 8,
   },
+  timerBoxDimmed: { opacity: 0.4 },
   timerInterval: {
     fontSize: 11,
     color: '#888',
@@ -150,6 +151,8 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
   },
+  dotActive: { backgroundColor: '#27ae60' },
+  dotInactive: { backgroundColor: '#ccc' },
   row: {
     flexDirection: 'row',
     gap: 8,

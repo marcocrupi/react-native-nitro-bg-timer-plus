@@ -60,11 +60,18 @@ export function StressTest() {
         </View>
         <View style={styles.stat}>
           <Text style={styles.statLabel}>Fired</Text>
-          <Text style={[styles.statValue, { color: '#27ae60' }]}>{fired}</Text>
+          <Text style={[styles.statValue, styles.statValueFired]}>{fired}</Text>
         </View>
         <View style={styles.stat}>
           <Text style={styles.statLabel}>Pending</Text>
-          <Text style={[styles.statValue, { color: pending > 0 ? '#f39c12' : '#27ae60' }]}>
+          <Text
+            style={[
+              styles.statValue,
+              pending > 0
+                ? styles.statValuePending
+                : styles.statValuePendingDone,
+            ]}
+          >
             {pending}
           </Text>
         </View>
@@ -101,6 +108,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1a1a2e',
   },
+  statValueFired: { color: '#27ae60' },
+  statValuePending: { color: '#f39c12' },
+  statValuePendingDone: { color: '#27ae60' },
   btn: {
     paddingVertical: 12,
     borderRadius: 8,
