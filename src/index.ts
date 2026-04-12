@@ -11,6 +11,20 @@ const intervalCallbacks = new Map<number, () => void>()
 
 export const BackgroundTimer = {
   setTimeout(callback: () => void, duration: number): number {
+    if (typeof callback !== 'function') {
+      throw new TypeError(
+        'BackgroundTimer.setTimeout: callback must be a function'
+      )
+    }
+    if (
+      typeof duration !== 'number' ||
+      !Number.isFinite(duration) ||
+      duration < 0
+    ) {
+      throw new RangeError(
+        'BackgroundTimer.setTimeout: duration must be a non-negative finite number'
+      )
+    }
     const id = nextId++
     timeoutCallbacks.set(id, callback)
     NitroBackgroundTimer.setTimeout(id, duration, () => {
@@ -26,6 +40,20 @@ export const BackgroundTimer = {
   },
 
   setInterval(callback: () => void, interval: number): number {
+    if (typeof callback !== 'function') {
+      throw new TypeError(
+        'BackgroundTimer.setInterval: callback must be a function'
+      )
+    }
+    if (
+      typeof interval !== 'number' ||
+      !Number.isFinite(interval) ||
+      interval < 0
+    ) {
+      throw new RangeError(
+        'BackgroundTimer.setInterval: interval must be a non-negative finite number'
+      )
+    }
     const id = nextId++
     intervalCallbacks.set(id, callback)
     NitroBackgroundTimer.setInterval(id, interval, () => {
