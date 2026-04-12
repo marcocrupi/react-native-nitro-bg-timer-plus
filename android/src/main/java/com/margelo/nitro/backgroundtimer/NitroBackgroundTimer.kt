@@ -30,7 +30,10 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       )
   }
 
-  private val timerThread = HandlerThread("NitroBgTimer-Worker").apply { start() }
+  private val timerThread = HandlerThread(
+    "NitroBgTimer-Worker",
+    Process.THREAD_PRIORITY_FOREGROUND
+  ).apply { start() }
   private val handler = Handler(timerThread.looper)
 
   private val powerManager = reactContext.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
