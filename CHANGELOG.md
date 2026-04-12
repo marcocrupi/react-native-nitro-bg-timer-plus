@@ -17,6 +17,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [0.3.0] - 2026-04-12
+
+### Added
+
+- `BackgroundTimer.startBackgroundMode()` and `BackgroundTimer.stopBackgroundMode()` — explicit opt-in APIs for Android foreground service control. While active, the library starts a `shortService` foreground service that keeps the host process at foreground scheduling priority, eliminating the ~10% residual `setInterval` drift observed in background after the B8 scheduling fixes. Recommended for known critical sessions (workouts, recordings, GPS tracking) where a stable notification is preferable to the implicit-fallback blink. iOS: no-op (iOS already achieves 100% background accuracy natively via `beginBackgroundTask` after the B8 step 1 fix in commit `06eaa066`).
+- `BackgroundTimer.configure(config)` API with `BackgroundTimerConfig` / `BackgroundTimerNotificationConfig` TypeScript interfaces. Customises the Android foreground service notification (title, text, channel id, channel name, icon drawable resource name). All fields are optional; omitted fields fall back to sensible defaults. Must be called before a background-mode session is active — throws `IllegalStateException` if called while explicit mode is requested or any timer is currently holding the implicit fallback alive. iOS: no-op.
+- **Implicit foreground service fallback** — if the consumer never calls `startBackgroundMode()`, the foreground service starts automatically on the first active timer and stops when the last timer completes. Existing `0.2.0` code continues to work unchanged; the only user-visible change is a persistent notification while timers are active in background.
+- New permissions declared in the library's own `AndroidManifest.xml` so consumers do not have to add anything to their app manifest: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SHORT_SERVICE` (API 34+), `POST_NOTIFICATIONS` (API 33+). `WAKE_LOCK` remains as in `0.2.0`.
+- `NitroBackgroundTimerService.kt` — new internal `shortService` foreground service with `NotificationCompat.Builder` notification, `IMPORTANCE_LOW` channel, tap-to-return `PendingIntent`, and a three-tier icon resolution fallback (custom drawable → app launcher icon → system info icon). Handles `ForegroundServiceStartNotAllowedException` (API 31+) and `ForegroundServiceDidNotStartInTimeException` (API 34+) gracefully by stopping self cleanly and letting the wake-lock-only fallback stay in effect.
+- New README section "Background Mode (Android)" covering the implicit/explicit activation modes, notification customisation, required permissions, the `POST_NOTIFICATIONS` runtime permission flow (with a ready-to-paste `PermissionsAndroid` snippet for RN 0.84+), and known limitations (3-hour `shortService` cumulative cap, iOS no-op).
+- New manual test scenarios in `TESTING.md` (A10–A14) covering implicit activation, explicit mode stability across timers, notification customisation, the B9 accuracy regression gate, and the `POST_NOTIFICATIONS`-denied graceful fallback.
+- New example app controls in Background Test 3 — "Start BG Mode" / "Stop BG Mode" / "Configure Notification" — mapped 1:1 to the A10–A14 scenarios.
+- 10 new Jest tests (39 total, up from 29) in a new `BackgroundTimer — background mode lifecycle` describe block, locking in the forwarding contract, dispose interaction, the semantic `configure` gate, and the `configure`-after-fireTimer path.
+
+### Changed
+
+- **Background timer accuracy on Android: from ~10% drift down to effectively 0%** when the foreground service is active. Validated empirically on Pixel 9 Pro XL Android stock with Background Test 3 over 90 seconds in background with screen off: Native = Expected = 97, fire count = 97, effective interval = 1004.3 ms, thread priority = -2. The foreground service composes cleanly with the B8 step 3 `HandlerThread` FOREGROUND priority fix — the thread-level priority alone could not close the last 10% because the process-level `bg_non_interactive` cgroup capped total CPU quota.
+
+### Removed
+
+- Diagnostic telemetry introduced in B8 step 2 (commit `bc8e07a`): the `getDebugTelemetry()` method on the HybridObject spec, the `debugFireCount` / `debugFirstFireUptime` / `debugLastFireUptime` fields and the uptime-stamping block in the Android interval Runnable, the iOS placeholder stub, the JS wrapper, and the "Show Diagnostic" button in the example app. The instrumentation served its diagnostic purpose during B8 and B9 development and is no longer needed now that the fix is validated on device.
+
+### Notes
+
+- This release introduces new optional permissions declared in the library manifest. Consumers upgrading from `0.2.0` will see a persistent notification when timers are active in background unless they do not schedule any timers. Existing code continues to work without modification — the implicit fallback handles backward compatibility automatically.
+- Consumer apps targeting Android 13+ (API 33) should request the `POST_NOTIFICATIONS` runtime permission as part of their onboarding flow. See the README "Background Mode (Android)" section for details. Without the permission the foreground service still starts but the notification does not appear, and on Android 14+ the system may terminate the service within ~10 seconds.
+- The `shortService` foreground service type caps cumulative duration at 3 hours per the Android 14 platform contract. For timers that need to run longer than 3 hours, consumers should use `AlarmManager` or `WorkManager` at the application level instead.
+
 ## [0.2.0] - 2026-04-12
 
 ### Added
@@ -123,7 +151,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TypeScript API wrapper with callback management
 - Full API documentation and usage examples in README
 
-[Unreleased]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/releases/tag/v0.0.1
