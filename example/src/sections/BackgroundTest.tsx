@@ -154,6 +154,72 @@ export function BackgroundTest() {
         </Text>
       </Pressable>
 
+      {/* B9 — background mode controls (Android foreground service). */}
+      <View style={styles.bgModeRow}>
+        <Pressable
+          style={[styles.btn, styles.btnBlue]}
+          onPress={() => {
+            try {
+              BackgroundTimer.startBackgroundMode()
+              addLog('[Background] Background mode started')
+            } catch (e) {
+              Alert.alert('startBackgroundMode error', String(e))
+            }
+          }}
+        >
+          <Text style={styles.btnText}>Start BG Mode</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.btn, styles.btnGrey]}
+          onPress={() => {
+            try {
+              BackgroundTimer.stopBackgroundMode()
+              addLog('[Background] Background mode stopped')
+            } catch (e) {
+              Alert.alert('stopBackgroundMode error', String(e))
+            }
+          }}
+        >
+          <Text style={styles.btnText}>Stop BG Mode</Text>
+        </Pressable>
+      </View>
+      <Pressable
+        style={styles.toggleBtn}
+        onPress={() => {
+          try {
+            BackgroundTimer.configure({
+              notification: {
+                title: 'Workout in progress',
+                text: 'Background timers running',
+                channelId: 'nitro_bg_timer_example_channel',
+                channelName: 'BgTimer Example',
+              },
+            })
+            addLog('[Background] Notification configured')
+            Alert.alert(
+              'Configure Notification',
+              'Custom notification config applied. It will be used the next time the foreground service starts.'
+            )
+          } catch (e) {
+            // configure() throws IllegalStateException if an active
+            // background-mode session exists (either explicit via Start
+            // BG Mode, or implicit via a currently running timer). Guide
+            // the user instead of showing the raw stack trace.
+            const message = String(e)
+            if (message.includes('background mode session is active')) {
+              Alert.alert(
+                'Configure Notification',
+                'Cannot change the notification while timers are running or background mode is active. Press Stop (and Stop BG Mode if active), then try again.'
+              )
+            } else {
+              Alert.alert('configure error', message)
+            }
+          }
+        }}
+      >
+        <Text style={styles.toggleText}>Configure Notification</Text>
+      </Pressable>
+
       {/* B8 step 2 — diagnostic telemetry button. Temporary. */}
       <Pressable
         style={styles.toggleBtn}
@@ -242,6 +308,14 @@ const styles = StyleSheet.create({
   },
   btnGreen: { backgroundColor: '#27ae60' },
   btnRed: { backgroundColor: '#e74c3c' },
+  btnBlue: { backgroundColor: '#2980b9' },
+  btnGrey: { backgroundColor: '#7f8c8d' },
+  bgModeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+    marginBottom: 8,
+  },
   btnDisabled: { opacity: 0.5 },
   btnText: { color: '#fff', fontWeight: '600', fontSize: 14 },
   toggleBtn: {
