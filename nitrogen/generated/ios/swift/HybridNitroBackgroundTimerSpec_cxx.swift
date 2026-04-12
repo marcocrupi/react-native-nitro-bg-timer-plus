@@ -125,19 +125,18 @@ open class HybridNitroBackgroundTimerSpec_cxx {
 
   // Methods
   @inline(__always)
-  public final func setTimeout(id: Double, duration: Double, callback: bridge.Func_void_double) -> bridge.Result_double_ {
+  public final func setTimeout(id: Double, duration: Double, callback: bridge.Func_void_double) -> bridge.Result_void_ {
     do {
-      let __result = try self.__implementation.setTimeout(id: id, duration: duration, callback: { () -> (Double) -> Void in
+      try self.__implementation.setTimeout(id: id, duration: duration, callback: { () -> (Double) -> Void in
         let __wrappedFunction = bridge.wrap_Func_void_double(callback)
         return { (__id: Double) -> Void in
           __wrappedFunction.call(__id)
         }
       }())
-      let __resultCpp = __result
-      return bridge.create_Result_double_(__resultCpp)
+      return bridge.create_Result_void_()
     } catch (let __error) {
       let __exceptionPtr = __error.toCpp()
-      return bridge.create_Result_double_(__exceptionPtr)
+      return bridge.create_Result_void_(__exceptionPtr)
     }
   }
   
@@ -153,19 +152,18 @@ open class HybridNitroBackgroundTimerSpec_cxx {
   }
   
   @inline(__always)
-  public final func setInterval(id: Double, interval: Double, callback: bridge.Func_void_double) -> bridge.Result_double_ {
+  public final func setInterval(id: Double, interval: Double, callback: bridge.Func_void_double) -> bridge.Result_void_ {
     do {
-      let __result = try self.__implementation.setInterval(id: id, interval: interval, callback: { () -> (Double) -> Void in
+      try self.__implementation.setInterval(id: id, interval: interval, callback: { () -> (Double) -> Void in
         let __wrappedFunction = bridge.wrap_Func_void_double(callback)
         return { (__id: Double) -> Void in
           __wrappedFunction.call(__id)
         }
       }())
-      let __resultCpp = __result
-      return bridge.create_Result_double_(__resultCpp)
+      return bridge.create_Result_void_()
     } catch (let __error) {
       let __exceptionPtr = __error.toCpp()
-      return bridge.create_Result_double_(__exceptionPtr)
+      return bridge.create_Result_void_(__exceptionPtr)
     }
   }
   

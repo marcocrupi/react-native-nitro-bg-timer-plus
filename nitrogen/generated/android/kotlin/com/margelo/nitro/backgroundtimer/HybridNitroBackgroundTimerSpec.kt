@@ -28,11 +28,11 @@ abstract class HybridNitroBackgroundTimerSpec: HybridObject() {
   
 
   // Methods
-  abstract fun setTimeout(id: Double, duration: Double, callback: (id: Double) -> Unit): Double
+  abstract fun setTimeout(id: Double, duration: Double, callback: (id: Double) -> Unit): Unit
   
   @DoNotStrip
   @Keep
-  private fun setTimeout_cxx(id: Double, duration: Double, callback: Func_void_double): Double {
+  private fun setTimeout_cxx(id: Double, duration: Double, callback: Func_void_double): Unit {
     val __result = setTimeout(id, duration, callback)
     return __result
   }
@@ -41,11 +41,11 @@ abstract class HybridNitroBackgroundTimerSpec: HybridObject() {
   @Keep
   abstract fun clearTimeout(id: Double): Unit
   
-  abstract fun setInterval(id: Double, interval: Double, callback: (id: Double) -> Unit): Double
+  abstract fun setInterval(id: Double, interval: Double, callback: (id: Double) -> Unit): Unit
   
   @DoNotStrip
   @Keep
-  private fun setInterval_cxx(id: Double, interval: Double, callback: Func_void_double): Double {
+  private fun setInterval_cxx(id: Double, interval: Double, callback: Func_void_double): Unit {
     val __result = setInterval(id, interval, callback)
     return __result
   }

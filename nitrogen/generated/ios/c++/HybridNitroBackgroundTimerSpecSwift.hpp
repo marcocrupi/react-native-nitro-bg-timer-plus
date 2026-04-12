@@ -66,13 +66,11 @@ namespace margelo::nitro::backgroundtimer {
 
   public:
     // Methods
-    inline double setTimeout(double id, double duration, const std::function<void(double /* id */)>& callback) override {
+    inline void setTimeout(double id, double duration, const std::function<void(double /* id */)>& callback) override {
       auto __result = _swiftPart.setTimeout(std::forward<decltype(id)>(id), std::forward<decltype(duration)>(duration), callback);
       if (__result.hasError()) [[unlikely]] {
         std::rethrow_exception(__result.error());
       }
-      auto __value = std::move(__result.value());
-      return __value;
     }
     inline void clearTimeout(double id) override {
       auto __result = _swiftPart.clearTimeout(std::forward<decltype(id)>(id));
@@ -80,13 +78,11 @@ namespace margelo::nitro::backgroundtimer {
         std::rethrow_exception(__result.error());
       }
     }
-    inline double setInterval(double id, double interval, const std::function<void(double /* id */)>& callback) override {
+    inline void setInterval(double id, double interval, const std::function<void(double /* id */)>& callback) override {
       auto __result = _swiftPart.setInterval(std::forward<decltype(id)>(id), std::forward<decltype(interval)>(interval), callback);
       if (__result.hasError()) [[unlikely]] {
         std::rethrow_exception(__result.error());
       }
-      auto __value = std::move(__result.value());
-      return __value;
     }
     inline void clearInterval(double id) override {
       auto __result = _swiftPart.clearInterval(std::forward<decltype(id)>(id));

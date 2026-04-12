@@ -42,7 +42,7 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
   }
 
   // MARK: - Timeout
-  func setTimeout(id: Double, duration: Double, callback: @escaping (Double) -> Void) -> Double {
+  func setTimeout(id: Double, duration: Double, callback: @escaping (Double) -> Void) {
     let intId = Int(id)
 
     DispatchQueue.main.async { [weak self] in
@@ -68,8 +68,6 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
       self.timeoutTimers[intId] = timer
     }
-
-    return id
   }
 
   func clearTimeout(id: Double) {
@@ -87,7 +85,7 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
   }
 
   // MARK: - Interval
-  func setInterval(id: Double, interval: Double, callback: @escaping (Double) -> Void) -> Double {
+  func setInterval(id: Double, interval: Double, callback: @escaping (Double) -> Void) {
     let intId = Int(id)
 
     DispatchQueue.main.async { [weak self] in
@@ -111,8 +109,6 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
       self.intervalTimers[intId] = timer
     }
-
-    return id
   }
 
   func clearInterval(id: Double) {

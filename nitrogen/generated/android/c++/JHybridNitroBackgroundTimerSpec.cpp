@@ -46,19 +46,17 @@ namespace margelo::nitro::backgroundtimer {
   
 
   // Methods
-  double JHybridNitroBackgroundTimerSpec::setTimeout(double id, double duration, const std::function<void(double /* id */)>& callback) {
-    static const auto method = _javaPart->javaClassStatic()->getMethod<double(double /* id */, double /* duration */, jni::alias_ref<JFunc_void_double::javaobject> /* callback */)>("setTimeout_cxx");
-    auto __result = method(_javaPart, id, duration, JFunc_void_double_cxx::fromCpp(callback));
-    return __result;
+  void JHybridNitroBackgroundTimerSpec::setTimeout(double id, double duration, const std::function<void(double /* id */)>& callback) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */, double /* duration */, jni::alias_ref<JFunc_void_double::javaobject> /* callback */)>("setTimeout_cxx");
+    method(_javaPart, id, duration, JFunc_void_double_cxx::fromCpp(callback));
   }
   void JHybridNitroBackgroundTimerSpec::clearTimeout(double id) {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */)>("clearTimeout");
     method(_javaPart, id);
   }
-  double JHybridNitroBackgroundTimerSpec::setInterval(double id, double interval, const std::function<void(double /* id */)>& callback) {
-    static const auto method = _javaPart->javaClassStatic()->getMethod<double(double /* id */, double /* interval */, jni::alias_ref<JFunc_void_double::javaobject> /* callback */)>("setInterval_cxx");
-    auto __result = method(_javaPart, id, interval, JFunc_void_double_cxx::fromCpp(callback));
-    return __result;
+  void JHybridNitroBackgroundTimerSpec::setInterval(double id, double interval, const std::function<void(double /* id */)>& callback) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */, double /* interval */, jni::alias_ref<JFunc_void_double::javaobject> /* callback */)>("setInterval_cxx");
+    method(_javaPart, id, interval, JFunc_void_double_cxx::fromCpp(callback));
   }
   void JHybridNitroBackgroundTimerSpec::clearInterval(double id) {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */)>("clearInterval");

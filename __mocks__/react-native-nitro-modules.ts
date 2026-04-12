@@ -22,7 +22,6 @@ const mockNativeTimer = {
         type: 'timeout',
         cleared: false,
       })
-      return id
     }
   ),
   clearTimeout: jest.fn((id: number) => {
@@ -38,7 +37,6 @@ const mockNativeTimer = {
         type: 'interval',
         cleared: false,
       })
-      return id
     }
   ),
   clearInterval: jest.fn((id: number) => {

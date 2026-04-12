@@ -38,7 +38,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
   }
 
   // --- Timeout ---
-  override fun setTimeout(id: Double, duration: Double, callback: (Double) -> Unit): Double {
+  override fun setTimeout(id: Double, duration: Double, callback: (Double) -> Unit) {
     val intId = id.toInt()
     clearTimeout(id)
 
@@ -55,7 +55,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
 
     timeoutRunnables[intId] = runnable
     handler.postDelayed(runnable, duration.toLong())
-    return id
   }
 
   override fun clearTimeout(id: Double) {
@@ -66,7 +65,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
   }
 
   // --- Interval ---
-  override fun setInterval(id: Double, interval: Double, callback: (Double) -> Unit): Double {
+  override fun setInterval(id: Double, interval: Double, callback: (Double) -> Unit) {
     val intId = id.toInt()
     clearInterval(id)
 
@@ -87,7 +86,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
 
     intervalRunnables[intId] = runnable
     handler.postDelayed(runnable, interval.toLong())
-    return id
   }
 
   override fun clearInterval(id: Double) {
