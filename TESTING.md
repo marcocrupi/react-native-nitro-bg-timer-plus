@@ -101,6 +101,73 @@ marshals it back to JS via `CallInvoker`.
 - [ ] Verify the log appears in Metro and no JSI errors are printed
 - [ ] Verify no `Tried to access JS runtime from non-JS thread` error
 
+### A10 — Implicit foreground service activation
+
+Default path: the consumer never calls `startBackgroundMode()`, and the
+library starts/stops the service automatically around active timers.
+
+- [ ] Grant `POST_NOTIFICATIONS` to the example app
+- [ ] Press "Start" in the Background Test section (no "Start BG Mode" press)
+- [ ] Verify the "Background Timer Active" notification appears in the shade
+- [ ] Verify `NitroBgTimer: Foreground service started` appears in logcat
+- [ ] Press "Stop" — verify the notification disappears and
+      `Foreground service stopped` appears in logcat
+
+### A11 — Explicit background mode stays stable across timers
+
+- [ ] Press "Configure Notification" (sets a custom title/text)
+- [ ] Press "Start BG Mode" — verify the notification appears immediately
+      even without any active timer
+- [ ] Press "Start" to begin the Background Test — notification must stay
+      the same (no blink, no channel recreation)
+- [ ] Press "Stop" on the Background Test — notification must stay alive
+      (explicit mode still held)
+- [ ] Press "Stop BG Mode" — verify the notification disappears
+- [ ] Verify `Background mode requested explicitly` and `Background mode
+      released explicitly` lines appear in logcat in the right order
+
+### A12 — Notification customization via `configure`
+
+- [ ] Press "Configure Notification" before starting any timer
+- [ ] Press "Start BG Mode"
+- [ ] Verify the notification shows "Workout in progress" as title and
+      "Background timers running" as text (values from the example app
+      configure call)
+- [ ] Press "Stop BG Mode", then "Start BG Mode" again — same custom
+      text should reappear (config persists across service stop/start
+      within the same process)
+
+### A13 — Background accuracy with foreground service (regression gate)
+
+This is the primary acceptance criterion for B9. Before B9, Background
+Test 3 on a Pixel 9 Pro XL stock Android showed Native ~78, Expected 100
+after 90s backgrounded with screen off (~10% drift). After B9, with the
+foreground service active, the drift must be near zero.
+
+- [ ] Press "Start BG Mode" (explicit mode, stable notification)
+- [ ] Press "Start" on Background Test 3
+- [ ] Background the app and lock the screen within 2 seconds
+- [ ] Wait 90 seconds on the lock screen (optionally: repeat the phone
+      while locked to ensure it doesn't dim off into Doze on first run)
+- [ ] Unlock, return to the app, press "Stop"
+- [ ] Verify `Native ≈ Expected` within 1-2 units (target: Native 89-91
+      when Expected is 90)
+- [ ] Repeat with "Stop BG Mode" pressed before backgrounding to confirm
+      the drift regresses to ~10% without the foreground service
+
+### A14 — POST_NOTIFICATIONS denied graceful fallback
+
+- [ ] Long-press the example app icon → App Info → Notifications →
+      disable all notifications, or revoke `POST_NOTIFICATIONS` via
+      `adb shell pm revoke com.nitrobgtimerexample android.permission.POST_NOTIFICATIONS`
+- [ ] Relaunch the example app, press "Start" on Background Test
+- [ ] Verify the app does not crash
+- [ ] Verify that a `Foreground service started` line still appears in
+      logcat but the notification does not appear in the shade
+- [ ] On API 34+, expect the system to terminate the service within
+      ~10 seconds; a `Foreground service stopped` or service death line
+      should follow — this is documented as a known limitation, not a bug
+
 ## iOS tests
 
 ### I1 — Basic timer functionality
