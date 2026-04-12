@@ -42,21 +42,16 @@ extra runtime when the app moves to background. No entries in
 
 ### Android
 
-Add the `WAKE_LOCK` permission to your `android/app/src/main/AndroidManifest.xml`
-so the module can acquire a `PARTIAL_WAKE_LOCK` while timers are active:
+No special configuration required. The library declares
+`android.permission.WAKE_LOCK` in its own manifest, which is automatically
+merged into your app at build time. The module acquires a
+`PARTIAL_WAKE_LOCK` (non-reference-counted, bounded-duration) only while
+timers are active, and releases it as soon as the last timer fires or is
+cleared.
 
-```xml
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-
-    <application
-        android:name=".MainApplication"
-        android:allowBackup="false"
-        android:theme="@style/AppTheme">
-        <!-- Your existing application configuration -->
-    </application>
-</manifest>
-```
+If `WAKE_LOCK` has been explicitly removed from the merged manifest (for
+example via `tools:node="remove"`), the module logs a warning and runs
+timers via the handler thread without a wake lock — no crash.
 
 ## Quick Usage
 
@@ -144,6 +139,47 @@ BackgroundTimer.setTimeout(() => {
   BackgroundTimer.clearInterval(id)
 }, 10000)
 ```
+
+#### `dispose(): void`
+
+Eagerly disposes all native resources held by the background timer (wake
+lock / background task, pending runnables, worker thread). Calling `dispose()`
+is **not** required for correct cleanup in normal usage — see
+[Lifecycle and cleanup](#lifecycle-and-cleanup) below for the full picture.
+
+After calling `dispose()`, the `BackgroundTimer` instance is **permanently
+unusable**:
+
+- `setTimeout` / `setInterval` throw an `Error`.
+- `clearTimeout` / `clearInterval` are silent no-ops.
+- `dispose()` itself is idempotent — calling it twice is safe.
+
+```ts
+BackgroundTimer.dispose()
+```
+
+## Lifecycle and cleanup
+
+The library handles native resource cleanup through a three-layer defense:
+
+1. **Automatic native lifecycle hooks.** On Android, a companion module
+   registered via React Native's package system listens for `invalidate()`
+   (bundle reload / Fast Refresh / bridge teardown) and `onHostDestroy()`
+   (Activity destroy) and disposes the live timer instance deterministically.
+   On iOS, the JSI runtime teardown releases the `HybridObject`, whose
+   `deinit` invalidates all pending `Timer`s and ends the background task.
+2. **Explicit `dispose()`.** Call `BackgroundTimer.dispose()` when you want
+   deterministic teardown earlier than the lifecycle hooks — for example,
+   inside a feature module's shutdown path, or before navigating away from
+   a long-lived screen that owns the timer.
+3. **GC fallback.** If neither of the above runs (rare, but possible if the
+   host tears down in an unusual way), Kotlin `finalize()` and Swift `deinit`
+   act as a safety net and release the wake lock / background task when the
+   garbage collector reclaims the instance.
+
+In normal usage, **you do not need to call `dispose()` manually** — the
+hooks above cover bundle reload and app destroy. Call it only when you have
+a concrete reason to force early release.
 
 ## Real-world Examples
 
@@ -388,14 +424,23 @@ BackgroundTimer.setInterval(() => {
 
 ### Android Implementation Details
 
-- ✅ Background execution via `PowerManager.PARTIAL_WAKE_LOCK`
-- ✅ Automatic WakeLock lifecycle management
+- Background execution via `PowerManager.PARTIAL_WAKE_LOCK` (non-reference-counted,
+  bounded-duration, per-call timeout).
+- All state mutations serialized on a dedicated `HandlerThread` to eliminate
+  race conditions between `setTimeout`/`clearTimeout` concurrent callers.
+- Companion React Native module disposes the timer deterministically on
+  bundle reload (`invalidate()`) and Activity destroy (`onHostDestroy`).
+- Graceful fallback: if `WAKE_LOCK` permission is missing or revoked, the
+  module logs a warning and runs timers without the wake lock instead of
+  crashing.
 
 ### iOS Implementation Details
 
-- ✅ Background execution via `UIApplication.beginBackgroundTask`
-- ✅ Automatic task expiration handling
-- ✅ Main-thread timer dispatch to prevent race conditions
+- Background execution via `UIApplication.beginBackgroundTask` with a safe
+  expiration handler that bounces to the main queue before cleanup.
+- Main-thread serialization of all timer state via `DispatchQueue.main.async`
+  eliminates cross-thread races.
+- `deinit` acts as a GC fallback when JS never calls `dispose()`.
 
 ## Troubleshooting
 
@@ -405,9 +450,12 @@ BackgroundTimer.setInterval(() => {
 
 #### Timers stop working in background (Android)
 
-- Ensure proper permissions are added to AndroidManifest.xml
-- Request battery optimization exemption for your app
-- Check if foreground service is properly configured
+- The `WAKE_LOCK` permission is declared by the library manifest and merged
+  automatically — no action needed unless you have explicitly removed it.
+- Request battery optimization exemption for your app (aggressive OEM battery
+  savers may still kill background tasks regardless of wake locks).
+- For very long-running background work, consider combining this library
+  with a foreground service.
 
 #### Timers not firing on iOS
 
