@@ -11,6 +11,38 @@ const intervalCallbacks = new Map<number, () => void>()
 
 let isDisposed = false
 
+/**
+ * Configuration for the Android foreground service notification used when
+ * background mode is active. All fields are optional; omitted fields fall
+ * back to sensible defaults (generic title, app launcher icon, library
+ * channel id). On iOS this configuration is ignored — iOS does not use a
+ * foreground service for background scheduling.
+ */
+export interface BackgroundTimerNotificationConfig {
+  /** Notification title. Default: `"Background Timer Active"`. */
+  title?: string
+  /** Notification body text. Default: `"Tap to return to the app"`. */
+  text?: string
+  /**
+   * Android notification channel id. Default: `"nitro_bg_timer_channel"`.
+   * Channels are created on first use (API 26+).
+   */
+  channelId?: string
+  /** Android notification channel name. Default: `"Background Timer"`. */
+  channelName?: string
+  /**
+   * Name of a drawable resource in the consumer app (e.g. `"ic_workout"`)
+   * to use as the notification small icon. If omitted or not found at
+   * runtime, the library falls back to the app's launcher icon, and then
+   * to a generic system icon.
+   */
+  iconResourceName?: string
+}
+
+export interface BackgroundTimerConfig {
+  notification?: BackgroundTimerNotificationConfig
+}
+
 export const BackgroundTimer = {
   setTimeout(callback: () => void, duration: number): number {
     if (isDisposed) {
@@ -102,6 +134,68 @@ export const BackgroundTimer = {
     timeoutCallbacks.clear()
     intervalCallbacks.clear()
     NitroBackgroundTimer.dispose()
+  },
+
+  /**
+   * Configures the Android foreground service notification used when
+   * background mode is active. Must be called before any timer is
+   * scheduled and before `startBackgroundMode()` — calling it while the
+   * service is already running throws on the native side.
+   *
+   * On iOS this is a no-op: iOS does not use a foreground service for
+   * background scheduling (the main run loop + `beginBackgroundTask`
+   * handle it natively).
+   *
+   * @throws if called on a disposed `BackgroundTimer` instance.
+   */
+  configure(config: BackgroundTimerConfig): void {
+    if (isDisposed) {
+      throw new Error(
+        'BackgroundTimer.configure: cannot configure a disposed BackgroundTimer instance'
+      )
+    }
+    NitroBackgroundTimer.configure(JSON.stringify(config ?? {}))
+  },
+
+  /**
+   * Requests background mode explicitly. On Android, this starts a
+   * foreground service that keeps the host process at foreground
+   * scheduling priority for the entire session, so `setInterval` /
+   * `setTimeout` fire with zero drift even in background / screen-off.
+   * The accompanying persistent notification stays stable until
+   * `stopBackgroundMode()` or `dispose()` is called.
+   *
+   * Use this when you have a known critical session (workout, recording,
+   * tracking) and want one stable notification for its duration, instead
+   * of the implicit-fallback behaviour that starts/stops the service
+   * around each individual timer.
+   *
+   * Idempotent: multiple calls have no additional effect. On iOS this is
+   * a no-op — iOS handles background timer accuracy natively.
+   *
+   * @throws if called on a disposed `BackgroundTimer` instance.
+   */
+  startBackgroundMode(): void {
+    if (isDisposed) {
+      throw new Error(
+        'BackgroundTimer.startBackgroundMode: cannot start background mode on a disposed BackgroundTimer instance'
+      )
+    }
+    NitroBackgroundTimer.startBackgroundMode()
+  },
+
+  /**
+   * Releases the explicit background mode requested via
+   * `startBackgroundMode()`. If timers are still active and the implicit
+   * fallback is enabled, the foreground service continues running until
+   * the last timer completes — only the explicit hold is released.
+   *
+   * On a disposed instance this is a silent no-op (for symmetry with
+   * `clearTimeout` / `clearInterval`). iOS: no-op.
+   */
+  stopBackgroundMode(): void {
+    if (isDisposed) return
+    NitroBackgroundTimer.stopBackgroundMode()
   },
 
   /**
