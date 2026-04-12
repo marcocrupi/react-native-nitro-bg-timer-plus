@@ -95,8 +95,11 @@
   },
   "peerDependencies": {
     "react": "*",
-    "react-native": "*",
+    "react-native": ">=0.76.0",
     "react-native-nitro-modules": ">=0.35.0"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "eslintConfig": {
     "root": true,

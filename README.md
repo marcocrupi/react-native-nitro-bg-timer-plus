@@ -35,37 +35,25 @@ yarn add react-native-nitro-bg-timer-plus react-native-nitro-modules
 
 ### iOS
 
-Add background processing capability to your `Info.plist`:
-
-```xml
-<key>UIBackgroundModes</key>
-<array>
-    <string>background-processing</string>
-    <string>background-fetch</string>
-</array>
-```
+No special configuration required. This module uses
+`UIApplication.beginBackgroundTask`, which grants up to ~30 seconds of
+extra runtime when the app moves to background. No entries in
+`UIBackgroundModes` are needed for basic timer use cases.
 
 ### Android
 
-Add the following permissions to your `android/app/src/main/AndroidManifest.xml`:
+Add the `WAKE_LOCK` permission to your `android/app/src/main/AndroidManifest.xml`
+so the module can acquire a `PARTIAL_WAKE_LOCK` while timers are active:
 
 ```xml
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Allow the app to run in background -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    
+
     <application
         android:name=".MainApplication"
         android:allowBackup="false"
         android:theme="@style/AppTheme">
-            
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:theme="@style/LaunchTheme">
-            <!-- Your existing activity configuration -->
-        </activity>
+        <!-- Your existing application configuration -->
     </application>
 </manifest>
 ```
