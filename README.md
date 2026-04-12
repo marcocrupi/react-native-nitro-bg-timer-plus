@@ -11,11 +11,15 @@ This module provides high-performance background timer functionality for React N
 ## Features
 
 - ⚡ High-performance native implementation using Nitro Modules
-- 🎯 Background-safe timers (setTimeout, clearTimeout, setInterval, clearInterval)
+- 🎯 Background-safe timers (`setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`)
 - 🔄 Continues running when app is backgrounded
 - 📱 Cross-platform support (iOS & Android)
 - 🚀 Zero-bridge overhead with direct native calls
-- 🛡️ Memory-safe with automatic cleanup
+- 🛡️ Three-layer cleanup defense: explicit `dispose()`, automatic Activity lifecycle hooks, GC fallback
+- 🔒 Thread-safe by design — all native state serialized on a dedicated worker thread (Android) or main queue (iOS)
+- 🪵 Structured debug telemetry for post-mortem analysis with Sentry / Crashlytics
+- 🛡️ Graceful fallback if `WAKE_LOCK` permission is missing — no crash, just a warning
+- ✅ 29 unit tests + manual release checklist
 
 ## Requirements
 
