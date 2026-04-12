@@ -44,8 +44,17 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
       // killing the process with 0x8badf00d. Bounce to main to safely mutate state.
       DispatchQueue.main.async {
         guard let self = self else { return }
-        self.logWarn("Background task expiration handler fired — cleaning up")
-        self.cleanupAll()
+        self.logWarn("Background task expiration handler fired — releasing background task identifier (timers preserved)")
+        // Critical: do NOT call cleanupAll() here. iOS only requires us to end
+        // the background task to avoid 0x8badf00d. Invalidating Timer instances
+        // here would silently disable all consumer timers ~28-30s after entering
+        // background — the very bug this change fixes. Timers must keep firing
+        // as long as the main run loop is alive; iOS decides when to actually
+        // suspend the app, not us.
+        if self.bgTask != .invalid {
+          UIApplication.shared.endBackgroundTask(self.bgTask)
+          self.bgTask = .invalid
+        }
       }
     }
 
