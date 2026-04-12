@@ -1,6 +1,8 @@
 package com.margelo.nitro.backgroundtimer
 
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.PowerManager
@@ -11,6 +13,7 @@ import com.facebook.proguard.annotations.DoNotStrip
 import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.ReactApplicationContext
 import com.margelo.nitro.NitroModules
+import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -56,6 +59,39 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   // thread — would otherwise both read false, both proceed past the guard,
   // and both reach the cleanup path.
   private val isDisposed = AtomicBoolean(false)
+
+  // Foreground service state. AtomicBoolean (not volatile) because these
+  // are mutated from both the JS thread (startBackgroundMode / stopBackgroundMode
+  // / configure / setTimeout / setInterval entry points) and the worker thread
+  // (cleanupAll). compareAndSet semantics give us the same race-free start/stop
+  // idempotency we rely on for `isDisposed`.
+  private val isForegroundServiceActive = AtomicBoolean(false)
+  private val isExplicitBackgroundModeRequested = AtomicBoolean(false)
+
+  // Written only from `configure()` on the JS thread. Read from
+  // `startForegroundServiceInternal()`, which is invoked both from the JS
+  // thread (explicit start path and the early-start path inside
+  // setTimeout/setInterval) and from the worker thread (the safety-net
+  // ensureForegroundServiceForTimer() call inside `handler.post`). The
+  // @Volatile is therefore load-bearing, not belt-and-braces: it is what
+  // makes configure()'s write visible to the worker thread without an
+  // explicit happens-before relationship.
+  //
+  // `configure()` throws if the service is already active, which prevents
+  // mid-session reconfiguration, so the only meaningful write-then-read
+  // pattern is: configure → startForegroundServiceInternal (either thread)
+  // → reads the stored reference. Any concurrent service start attempt
+  // that loses the CAS returns without reading this field.
+  @Volatile
+  private var notificationConfig: NotificationConfig? = null
+
+  private data class NotificationConfig(
+    val title: String?,
+    val text: String?,
+    val channelId: String?,
+    val channelName: String?,
+    val iconResourceName: String?
+  )
 
   // === DIAGNOSTIC TELEMETRY (B8 step 2) ===
   // To be removed after Android scheduling fix is validated.
@@ -174,6 +210,188 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         Log.w(TAG, "Error releasing wake lock during cleanup", e)
       }
     }
+    // Tear down the foreground service — both the explicit flag and any
+    // implicit activation. Safe to call unconditionally; stopForegroundServiceInternal
+    // early-returns if the service is not active.
+    isExplicitBackgroundModeRequested.set(false)
+    stopForegroundServiceInternal()
+  }
+
+  // --- Foreground service control ---
+  /**
+   * Starts the foreground service, promoting the host process to foreground
+   * scheduling priority so timer Runnables are not throttled by the
+   * `bg_non_interactive` cgroup.
+   *
+   * Idempotent: returns immediately if the service is already active. Safe
+   * to call from any thread.
+   *
+   * On failure (e.g. Android 12+ background-start restriction), logs a
+   * warning and leaves `isForegroundServiceActive = false`, so timers
+   * continue running with wake-lock-only precision (~10% drift).
+   */
+  private fun startForegroundServiceInternal() {
+    if (!isForegroundServiceActive.compareAndSet(false, true)) return
+    val intent = Intent(reactContext, NitroBackgroundTimerService::class.java).apply {
+      action = NitroBackgroundTimerService.ACTION_START
+      notificationConfig?.let { cfg ->
+        putExtra(NitroBackgroundTimerService.EXTRA_CONFIG_TITLE, cfg.title)
+        putExtra(NitroBackgroundTimerService.EXTRA_CONFIG_TEXT, cfg.text)
+        putExtra(NitroBackgroundTimerService.EXTRA_CONFIG_CHANNEL_ID, cfg.channelId)
+        putExtra(NitroBackgroundTimerService.EXTRA_CONFIG_CHANNEL_NAME, cfg.channelName)
+        putExtra(NitroBackgroundTimerService.EXTRA_CONFIG_ICON_RESOURCE_NAME, cfg.iconResourceName)
+      }
+    }
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        reactContext.startForegroundService(intent)
+      } else {
+        reactContext.startService(intent)
+      }
+      Log.i(TAG, "Foreground service started")
+    } catch (e: Exception) {
+      // On API 31+ this can throw ForegroundServiceStartNotAllowedException
+      // if the app tries to start it from a background state without a
+      // qualifying trigger. We roll back the flag and fall through — timers
+      // will run with wake-lock-only precision.
+      Log.w(TAG, "Failed to start foreground service, falling back to wake lock only", e)
+      isForegroundServiceActive.set(false)
+    }
+  }
+
+  private fun stopForegroundServiceInternal() {
+    if (!isForegroundServiceActive.compareAndSet(true, false)) return
+    val intent = Intent(reactContext, NitroBackgroundTimerService::class.java)
+    try {
+      reactContext.stopService(intent)
+      Log.i(TAG, "Foreground service stopped")
+    } catch (e: Exception) {
+      Log.w(TAG, "Failed to stop foreground service", e)
+    }
+  }
+
+  /**
+   * Ensures the foreground service is running before a timer is scheduled.
+   *
+   * Called from two places:
+   *   1. **JS thread**, at the top of `setTimeout` / `setInterval`, before
+   *      `handler.post {}`. Early-start path — we want the
+   *      `startForegroundService()` call to race against any imminent
+   *      app-background transition so Android 14's 10-second start window
+   *      is still open.
+   *   2. **Worker thread**, inside the `handler.post {}` block of
+   *      `setTimeout` / `setInterval`. Safety-net path — closes the race
+   *      where a previous Runnable's `maybeStopForegroundServiceAfterClear`
+   *      stopped the service between the JS-thread check and the worker's
+   *      processing of the post.
+   *
+   * Idempotent via `isForegroundServiceActive` CAS inside
+   * `startForegroundServiceInternal`: if the service is already up, this is
+   * a no-op; if a concurrent start is in flight, the CAS loser returns
+   * without side-effects.
+   *
+   * Note on explicit vs implicit mode: this method intentionally does NOT
+   * short-circuit on `isExplicitBackgroundModeRequested`. A previous design
+   * did, but that path silently swallowed the failure-retry case where
+   * `startBackgroundMode()` tried and failed (e.g. Android 12+ background
+   * start restriction) — subsequent timers would then never retry the
+   * start. Checking only `isForegroundServiceActive` is both simpler and
+   * self-healing.
+   */
+  private fun ensureForegroundServiceForTimer() {
+    if (isForegroundServiceActive.get()) return
+    startForegroundServiceInternal()
+  }
+
+  /**
+   * Called after a timer is cleared or fires-and-completes. Stops the
+   * foreground service only if both maps are empty AND the consumer has
+   * not explicitly requested background mode. Must be called from the
+   * worker thread (the maps are only safely-size-able after serialized
+   * mutation).
+   */
+  private fun maybeStopForegroundServiceAfterClear() {
+    if (isExplicitBackgroundModeRequested.get()) return
+    if (timeoutRunnables.isNotEmpty() || intervalRunnables.isNotEmpty()) return
+    stopForegroundServiceInternal()
+  }
+
+  // --- Public background-mode API ---
+  override fun startBackgroundMode() {
+    if (isDisposed.get()) {
+      Log.w(TAG, "startBackgroundMode called on disposed instance, ignoring")
+      return
+    }
+    // CAS guarantees idempotency — second caller takes the false branch.
+    if (isExplicitBackgroundModeRequested.compareAndSet(false, true)) {
+      Log.i(TAG, "Background mode requested explicitly")
+      startForegroundServiceInternal()
+    } else if (BuildConfig.DEBUG) {
+      Log.d(TAG, "Background mode already requested, no-op")
+    }
+  }
+
+  override fun stopBackgroundMode() {
+    if (isDisposed.get()) return
+    if (isExplicitBackgroundModeRequested.compareAndSet(true, false)) {
+      Log.i(TAG, "Background mode released explicitly")
+      // Post the map-emptiness check onto the worker thread so it is
+      // serialized against any setTimeout/setInterval posts already in the
+      // handler queue. A naive JS-thread check can race against a worker-
+      // pending postX that hasn't inserted X into the map yet — we'd see
+      // an empty map, stop the service, then postX would run and schedule
+      // a timer with no foreground service backing it.
+      handler.post {
+        maybeStopForegroundServiceAfterClear()
+      }
+    }
+  }
+
+  override fun configure(configJson: String) {
+    if (isDisposed.get()) {
+      Log.w(TAG, "configure called on disposed instance, ignoring")
+      return
+    }
+    // Gate on the semantic "is anyone still using the service" question,
+    // not on the physical `isForegroundServiceActive` flag. The physical
+    // flag is updated asynchronously by the worker thread inside
+    // maybeStopForegroundServiceAfterClear(), so right after the user
+    // calls stopBackgroundMode() it still reads `true` for a brief window,
+    // even though the user has clearly signaled "I want this stopped".
+    //
+    // Semantic check: block configure if an explicit background mode is
+    // requested OR any timer is holding the implicit fallback alive. This
+    // covers every "the notification is currently visible and changing its
+    // content would be confusing" case that Decision 2 of the B9 brief
+    // meant to catch, while allowing the "stopBackgroundMode, then
+    // immediately reconfigure for the next session" pattern to succeed.
+    if (isExplicitBackgroundModeRequested.get() ||
+        timeoutRunnables.isNotEmpty() ||
+        intervalRunnables.isNotEmpty()) {
+      throw IllegalStateException(
+        "BackgroundTimer.configure() cannot be called while a background " +
+          "mode session is active. Stop timers and call stopBackgroundMode() first."
+      )
+    }
+    try {
+      val root = JSONObject(configJson)
+      val notification = root.optJSONObject("notification")
+      if (notification == null) {
+        notificationConfig = null
+        Log.i(TAG, "BackgroundTimer configured with empty notification block")
+        return
+      }
+      notificationConfig = NotificationConfig(
+        title = notification.optString("title").takeIf { it.isNotEmpty() },
+        text = notification.optString("text").takeIf { it.isNotEmpty() },
+        channelId = notification.optString("channelId").takeIf { it.isNotEmpty() },
+        channelName = notification.optString("channelName").takeIf { it.isNotEmpty() },
+        iconResourceName = notification.optString("iconResourceName").takeIf { it.isNotEmpty() }
+      )
+      Log.i(TAG, "BackgroundTimer configured: $notificationConfig")
+    } catch (e: Exception) {
+      Log.w(TAG, "Failed to parse configuration JSON, ignoring", e)
+    }
   }
 
   // --- Timeout ---
@@ -182,7 +400,18 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       Log.w(TAG, "setTimeout called on disposed instance, ignoring")
       return
     }
+    // Implicit foreground service activation: kicks in when the consumer
+    // hasn't called startBackgroundMode() explicitly. Called from the JS
+    // thread before posting so the service request beats the timer race
+    // against a quick app-background transition.
+    ensureForegroundServiceForTimer()
     handler.post {
+      // Safety net: between the JS-thread check above and this worker-side
+      // block, a previous Runnable may have completed and stopped the
+      // service via maybeStopForegroundServiceAfterClear(). Re-assert the
+      // service state here — idempotent via CAS, no-op if already active.
+      ensureForegroundServiceForTimer()
+
       val intId = id.toInt()
       // inline-clear previous timer with same id (no re-post to avoid deadlock-free but wasteful double-hop)
       timeoutRunnables[intId]?.let { handler.removeCallbacks(it) }
@@ -197,6 +426,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         }
         timeoutRunnables.remove(intId)
         releaseWakeLockIfNeeded()
+        maybeStopForegroundServiceAfterClear()
       }
 
       timeoutRunnables[intId] = runnable
@@ -211,6 +441,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       timeoutRunnables[intId]?.let { handler.removeCallbacks(it) }
       timeoutRunnables.remove(intId)
       releaseWakeLockIfNeeded()
+      maybeStopForegroundServiceAfterClear()
     }
   }
 
@@ -220,7 +451,11 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       Log.w(TAG, "setInterval called on disposed instance, ignoring")
       return
     }
+    ensureForegroundServiceForTimer()
     handler.post {
+      // Safety net: see equivalent comment in setTimeout above.
+      ensureForegroundServiceForTimer()
+
       val intId = id.toInt()
       intervalRunnables[intId]?.let { handler.removeCallbacks(it) }
       intervalRunnables.remove(intId)
@@ -262,6 +497,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       intervalRunnables[intId]?.let { handler.removeCallbacks(it) }
       intervalRunnables.remove(intId)
       releaseWakeLockIfNeeded()
+      maybeStopForegroundServiceAfterClear()
     }
   }
 
