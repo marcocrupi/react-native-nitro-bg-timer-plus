@@ -43,6 +43,9 @@ const mockNativeTimer = {
     const t = state.timers.get(id)
     if (t) t.cleared = true
   }),
+  dispose: jest.fn(() => {
+    state.timers.clear()
+  }),
 }
 
 export const NitroModules = {
@@ -65,5 +68,9 @@ export const __mockHelpers = {
     mockNativeTimer.clearTimeout.mockClear()
     mockNativeTimer.setInterval.mockClear()
     mockNativeTimer.clearInterval.mockClear()
+    mockNativeTimer.dispose.mockClear()
+  },
+  disposeCalls(): number {
+    return mockNativeTimer.dispose.mock.calls.length
   },
 }

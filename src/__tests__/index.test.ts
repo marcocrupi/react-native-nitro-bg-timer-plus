@@ -216,3 +216,98 @@ describe('BackgroundTimer — input validation', () => {
     })
   })
 })
+
+describe('BackgroundTimer — dispose lifecycle', () => {
+  it('dispose() can be called and is idempotent', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      expect(() => BackgroundTimer.dispose()).not.toThrow()
+      expect(() => BackgroundTimer.dispose()).not.toThrow()
+    })
+  })
+
+  it('dispose() forwards exactly one call to the native hybrid object', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      expect(__mockHelpers.disposeCalls()).toBe(0)
+      BackgroundTimer.dispose()
+      expect(__mockHelpers.disposeCalls()).toBe(1)
+      BackgroundTimer.dispose()
+      expect(__mockHelpers.disposeCalls()).toBe(1)
+    })
+  })
+
+  it('throws when setTimeout is called after dispose', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      BackgroundTimer.dispose()
+      expect(() => BackgroundTimer.setTimeout(() => {}, 100)).toThrow(
+        /disposed/
+      )
+    })
+  })
+
+  it('throws when setInterval is called after dispose', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      BackgroundTimer.dispose()
+      expect(() => BackgroundTimer.setInterval(() => {}, 100)).toThrow(
+        /disposed/
+      )
+    })
+  })
+
+  it('clearTimeout after dispose is silent (no throw)', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const id = BackgroundTimer.setTimeout(() => {}, 100)
+      BackgroundTimer.dispose()
+      expect(() => BackgroundTimer.clearTimeout(id)).not.toThrow()
+    })
+  })
+
+  it('clearInterval after dispose is silent (no throw)', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const id = BackgroundTimer.setInterval(() => {}, 100)
+      BackgroundTimer.dispose()
+      expect(() => BackgroundTimer.clearInterval(id)).not.toThrow()
+    })
+  })
+
+  it('dispose() clears the JS-side callback map so GC can reclaim user closures', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      const cb = jest.fn()
+      const id = BackgroundTimer.setTimeout(cb, 100)
+      BackgroundTimer.dispose()
+      // Even if a late-arriving native fire is replayed, the user callback
+      // must not be invoked because the JS-side map was cleared on dispose.
+      expect(() => __mockHelpers.fireTimer(id)).toThrow() // timer was cleared from mock state
+      expect(cb).not.toHaveBeenCalled()
+    })
+  })
+
+  it('does not call native clearTimeout after dispose', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        NitroModules,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      const id = BackgroundTimer.setTimeout(() => {}, 100)
+      BackgroundTimer.dispose()
+      const nativeInstance =
+        NitroModules.createHybridObject.mock.results[0].value
+      const clearCallsBefore = nativeInstance.clearTimeout.mock.calls.length
+      BackgroundTimer.clearTimeout(id)
+      const clearCallsAfter = nativeInstance.clearTimeout.mock.calls.length
+      expect(clearCallsAfter).toBe(clearCallsBefore)
+    })
+  })
+})
