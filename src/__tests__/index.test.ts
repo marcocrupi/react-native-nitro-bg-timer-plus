@@ -311,3 +311,178 @@ describe('BackgroundTimer — dispose lifecycle', () => {
     })
   })
 })
+
+describe('BackgroundTimer — background mode lifecycle', () => {
+  it('startBackgroundMode forwards exactly one call to the native hybrid object', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      BackgroundTimer.startBackgroundMode()
+      expect(__mockHelpers.startBackgroundModeCalls()).toBe(1)
+      expect(__mockHelpers.isExplicitBackgroundModeRequested()).toBe(true)
+    })
+  })
+
+  it('stopBackgroundMode forwards exactly one call to the native hybrid object', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      BackgroundTimer.startBackgroundMode()
+      BackgroundTimer.stopBackgroundMode()
+      expect(__mockHelpers.stopBackgroundModeCalls()).toBe(1)
+      expect(__mockHelpers.isExplicitBackgroundModeRequested()).toBe(false)
+    })
+  })
+
+  it('configure forwards the stringified notification config to native', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      BackgroundTimer.configure({
+        notification: {
+          title: 'Custom Title',
+          text: 'Custom Text',
+          channelId: 'my_channel',
+          channelName: 'My Channel',
+          iconResourceName: 'ic_custom',
+        },
+      })
+      expect(__mockHelpers.configureCalls()).toBe(1)
+      const received = JSON.parse(__mockHelpers.lastConfigJson())
+      expect(received).toEqual({
+        notification: {
+          title: 'Custom Title',
+          text: 'Custom Text',
+          channelId: 'my_channel',
+          channelName: 'My Channel',
+          iconResourceName: 'ic_custom',
+        },
+      })
+    })
+  })
+
+  it('configure with an empty config forwards "{}" to native without throwing', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      expect(() => BackgroundTimer.configure({})).not.toThrow()
+      expect(__mockHelpers.configureCalls()).toBe(1)
+      expect(__mockHelpers.lastConfigJson()).toBe('{}')
+    })
+  })
+
+  it('startBackgroundMode after dispose throws and does not forward to native', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      BackgroundTimer.dispose()
+      expect(() => BackgroundTimer.startBackgroundMode()).toThrow(/disposed/)
+      expect(__mockHelpers.startBackgroundModeCalls()).toBe(0)
+    })
+  })
+
+  it('stopBackgroundMode after dispose is silent (matches clearTimeout idiom)', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      BackgroundTimer.dispose()
+      expect(() => BackgroundTimer.stopBackgroundMode()).not.toThrow()
+      expect(__mockHelpers.stopBackgroundModeCalls()).toBe(0)
+    })
+  })
+
+  it('configure after dispose throws and does not forward to native', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      BackgroundTimer.dispose()
+      expect(() =>
+        BackgroundTimer.configure({ notification: { title: 'X' } })
+      ).toThrow(/disposed/)
+      expect(__mockHelpers.configureCalls()).toBe(0)
+    })
+  })
+
+  it('configure succeeds immediately after stopBackgroundMode (semantic check fix, round 4)', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      BackgroundTimer.startBackgroundMode()
+      BackgroundTimer.stopBackgroundMode()
+      // After stopBackgroundMode the user should be able to reconfigure
+      // for the next session without waiting for a worker-thread tick.
+      // This exercises the round-4 fix where configure gates on the
+      // semantic "explicit || maps non-empty" signal rather than the
+      // lagging physical `isForegroundServiceActive` flag.
+      expect(() =>
+        BackgroundTimer.configure({ notification: { title: 'Next' } })
+      ).not.toThrow()
+      expect(__mockHelpers.configureCalls()).toBe(1)
+    })
+  })
+
+  it('configure succeeds after a setTimeout has fired and completed', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      const cb = jest.fn()
+      const id = BackgroundTimer.setTimeout(cb, 100)
+      __mockHelpers.fireTimer(id)
+      // After the timeout fires, both native and mock remove it from the
+      // active map. configure should then allow — no live session is
+      // holding the service open.
+      expect(() =>
+        BackgroundTimer.configure({ notification: { title: 'After' } })
+      ).not.toThrow()
+      expect(__mockHelpers.configureCalls()).toBe(1)
+    })
+  })
+
+  it('configure is blocked while a setTimeout is still active', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      BackgroundTimer.setTimeout(() => {}, 1000)
+      // The implicit fallback keeps the service alive while the timer is
+      // pending, and the notification is visible to the user.
+      // configure() must throw to prevent mid-visible reconfiguration.
+      expect(() =>
+        BackgroundTimer.configure({ notification: { title: 'Mid' } })
+      ).toThrow(/background mode session is active/)
+      // The native mock was called (jest.fn counts invocations that
+      // throw), but no config was stored because the throw happened
+      // before the assignment.
+      expect(__mockHelpers.lastConfigJson()).toBeNull()
+    })
+  })
+})
