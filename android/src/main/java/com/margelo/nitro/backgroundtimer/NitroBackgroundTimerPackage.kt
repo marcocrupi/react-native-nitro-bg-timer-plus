@@ -19,6 +19,13 @@ import com.facebook.react.module.model.ReactModuleInfoProvider
  * Bridge and Bridgeless modes, whereas a companion `NativeModule` would be
  * unreachable in Bridgeless without `useTurboModuleInterop()` (see the
  * commit message of this file's rewrite for details).
+ *
+ * **Manual linking note**: autolinking (RN 0.60+) registers this package
+ * automatically. If you use manual linking, you MUST add
+ * `NitroBackgroundTimerPackage` to your host app's `getPackages()` —
+ * otherwise the `companion object` static `initializeNative()` block is
+ * never executed and the Nitro C++ library is never loaded, causing the
+ * `HybridObject` to crash on first access with `UnsatisfiedLinkError`.
  */
 class NitroBackgroundTimerPackage : BaseReactPackage() {
   override fun getModule(name: String, reactContext: ReactApplicationContext): NativeModule? = null
