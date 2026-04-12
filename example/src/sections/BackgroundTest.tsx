@@ -220,37 +220,6 @@ export function BackgroundTest() {
         <Text style={styles.toggleText}>Configure Notification</Text>
       </Pressable>
 
-      {/* B8 step 2 — diagnostic telemetry button. Temporary. */}
-      <Pressable
-        style={styles.toggleBtn}
-        onPress={() => {
-          try {
-            const t = BackgroundTimer.getDebugTelemetry()
-            const lines = [
-              `Platform: ${t.platform ?? 'android'}`,
-              t.note ? `Note: ${t.note}` : null,
-              t.fireCount !== undefined ? `Fire count: ${t.fireCount}` : null,
-              t.effectiveIntervalMs !== undefined
-                ? `Effective interval: ${t.effectiveIntervalMs.toFixed(1)}ms`
-                : null,
-              t.threadPriority !== undefined
-                ? `Thread priority: ${t.threadPriority}`
-                : null,
-              t.firstFireUptime !== undefined
-                ? `First fire uptime: ${t.firstFireUptime}`
-                : null,
-              t.lastFireUptime !== undefined
-                ? `Last fire uptime: ${t.lastFireUptime}`
-                : null,
-            ].filter(Boolean)
-            Alert.alert('Native Telemetry', lines.join('\n'))
-          } catch (e) {
-            Alert.alert('Telemetry error', String(e))
-          }
-        }}
-      >
-        <Text style={styles.toggleText}>Show Diagnostic</Text>
-      </Pressable>
     </Section>
   )
 }

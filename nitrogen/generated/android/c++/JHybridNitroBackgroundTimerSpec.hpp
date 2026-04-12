@@ -61,7 +61,6 @@ namespace margelo::nitro::backgroundtimer {
     void startBackgroundMode() override;
     void stopBackgroundMode() override;
     void configure(const std::string& configJson) override;
-    std::string getDebugTelemetry() override;
 
   private:
     jni::global_ref<JHybridNitroBackgroundTimerSpec::JavaPart> _javaPart;

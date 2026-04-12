@@ -7,7 +7,6 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.PowerManager
 import android.os.Process
-import android.os.SystemClock
 import android.util.Log
 import com.facebook.proguard.annotations.DoNotStrip
 import com.facebook.react.bridge.LifecycleEventListener
@@ -16,7 +15,6 @@ import com.margelo.nitro.NitroModules
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 
 @DoNotStrip
 class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventListener {
@@ -92,17 +90,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     val channelName: String?,
     val iconResourceName: String?
   )
-
-  // === DIAGNOSTIC TELEMETRY (B8 step 2) ===
-  // To be removed after Android scheduling fix is validated.
-  // Counts how many times the interval Runnable actually executes natively,
-  // independent of whether the JS callback is delivered. Distinguishes A2
-  // (native Runnable slowed down by background cgroup + default thread
-  // priority) from A3 (callback dispatcher drops under pressure).
-  private val debugFireCount = AtomicLong(0)
-  private val debugFirstFireUptime = AtomicLong(0)
-  private val debugLastFireUptime = AtomicLong(0)
-  // === END DIAGNOSTIC TELEMETRY ===
 
   init {
     if (BuildConfig.DEBUG) {
@@ -463,15 +450,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       acquireWakeLock()
       val runnable = object : Runnable {
         override fun run() {
-          // === DIAGNOSTIC TELEMETRY (B8 step 2) ===
-          val now = SystemClock.uptimeMillis()
-          if (debugFireCount.get() == 0L) {
-            debugFirstFireUptime.set(now)
-          }
-          debugLastFireUptime.set(now)
-          debugFireCount.incrementAndGet()
-          // === END DIAGNOSTIC TELEMETRY ===
-
           try {
             callback(id)
           } catch (e: Exception) {
@@ -500,26 +478,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       maybeStopForegroundServiceAfterClear()
     }
   }
-
-  // === DIAGNOSTIC TELEMETRY (B8 step 2) ===
-  // To be removed after Android scheduling fix is validated.
-  override fun getDebugTelemetry(): String {
-    val count = debugFireCount.get()
-    val first = debugFirstFireUptime.get()
-    val last = debugLastFireUptime.get()
-    val effectiveIntervalMs = if (count > 1L) {
-      (last - first).toDouble() / (count - 1).toDouble()
-    } else {
-      0.0
-    }
-    val threadPriority = try {
-      Process.getThreadPriority(timerThread.threadId)
-    } catch (e: Exception) {
-      -999
-    }
-    return """{"fireCount":$count,"firstFireUptime":$first,"lastFireUptime":$last,"effectiveIntervalMs":$effectiveIntervalMs,"threadPriority":$threadPriority}"""
-  }
-  // === END DIAGNOSTIC TELEMETRY ===
 
   // --- LifecycleEventListener ---
   override fun onHostResume() {
