@@ -16,6 +16,7 @@
 
 
 #include <functional>
+#include <string>
 
 namespace margelo::nitro::backgroundtimer {
 
@@ -52,6 +53,7 @@ namespace margelo::nitro::backgroundtimer {
       virtual void clearTimeout(double id) = 0;
       virtual void setInterval(double id, double interval, const std::function<void(double /* id */)>& callback) = 0;
       virtual void clearInterval(double id) = 0;
+      virtual std::string getDebugTelemetry() = 0;
 
     protected:
       // Hybrid Setup

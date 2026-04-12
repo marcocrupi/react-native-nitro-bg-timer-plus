@@ -15,6 +15,7 @@ namespace NitroBackgroundTimer { class HybridNitroBackgroundTimerSpec_cxx; }
 
 
 #include <functional>
+#include <string>
 
 #include "NitroBackgroundTimer-Swift-Cxx-Umbrella.hpp"
 
@@ -89,6 +90,14 @@ namespace margelo::nitro::backgroundtimer {
       if (__result.hasError()) [[unlikely]] {
         std::rethrow_exception(__result.error());
       }
+    }
+    inline std::string getDebugTelemetry() override {
+      auto __result = _swiftPart.getDebugTelemetry();
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+      auto __value = std::move(__result.value());
+      return __value;
     }
 
   private:

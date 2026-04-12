@@ -58,6 +58,7 @@ namespace margelo::nitro::backgroundtimer {
     void clearTimeout(double id) override;
     void setInterval(double id, double interval, const std::function<void(double /* id */)>& callback) override;
     void clearInterval(double id) override;
+    std::string getDebugTelemetry() override;
 
   private:
     jni::global_ref<JHybridNitroBackgroundTimerSpec::JavaPart> _javaPart;

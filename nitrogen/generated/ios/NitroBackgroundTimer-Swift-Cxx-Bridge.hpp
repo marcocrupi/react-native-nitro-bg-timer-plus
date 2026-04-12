@@ -21,6 +21,7 @@ namespace NitroBackgroundTimer { class HybridNitroBackgroundTimerSpec_cxx; }
 #include <exception>
 #include <functional>
 #include <memory>
+#include <string>
 
 /**
  * Contains specialized versions of C++ templated types so they can be accessed from Swift,
@@ -69,6 +70,15 @@ namespace margelo::nitro::backgroundtimer::bridge::swift {
   }
   inline Result_void_ create_Result_void_(const std::exception_ptr& error) noexcept {
     return Result<void>::withError(error);
+  }
+  
+  // pragma MARK: Result<std::string>
+  using Result_std__string_ = Result<std::string>;
+  inline Result_std__string_ create_Result_std__string_(const std::string& value) noexcept {
+    return Result<std::string>::withValue(value);
+  }
+  inline Result_std__string_ create_Result_std__string_(const std::exception_ptr& error) noexcept {
+    return Result<std::string>::withError(error);
   }
 
 } // namespace margelo::nitro::backgroundtimer::bridge::swift

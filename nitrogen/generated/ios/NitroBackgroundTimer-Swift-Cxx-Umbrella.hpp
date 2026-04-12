@@ -17,6 +17,7 @@ namespace margelo::nitro::backgroundtimer { class HybridNitroBackgroundTimerSpec
 #include <exception>
 #include <functional>
 #include <memory>
+#include <string>
 
 // C++ helpers for Swift
 #include "NitroBackgroundTimer-Swift-Cxx-Bridge.hpp"

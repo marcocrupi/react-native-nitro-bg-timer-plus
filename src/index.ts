@@ -103,4 +103,29 @@ export const BackgroundTimer = {
     intervalCallbacks.clear()
     NitroBackgroundTimer.dispose()
   },
+
+  /**
+   * DIAGNOSTIC ONLY (B8 step 2). Returns parsed native telemetry from the
+   * Android `setInterval` Runnable counter. Used to distinguish whether
+   * background drift comes from the native scheduler (A2) or the Nitro
+   * callback dispatcher (A3). iOS returns a placeholder — the iOS path was
+   * fixed in commit 06eaa066. To be removed after the Android scheduling
+   * fix is validated.
+   */
+  getDebugTelemetry(): {
+    fireCount?: number
+    firstFireUptime?: number
+    lastFireUptime?: number
+    effectiveIntervalMs?: number
+    threadPriority?: number
+    platform?: string
+    note?: string
+  } {
+    if (isDisposed) {
+      throw new Error(
+        'BackgroundTimer.getDebugTelemetry: cannot get telemetry on a disposed instance'
+      )
+    }
+    return JSON.parse(NitroBackgroundTimer.getDebugTelemetry())
+  },
 }

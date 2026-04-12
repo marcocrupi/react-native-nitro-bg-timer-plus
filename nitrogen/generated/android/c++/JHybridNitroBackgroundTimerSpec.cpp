@@ -9,6 +9,7 @@
 
 
 
+#include <string>
 #include <functional>
 #include "JFunc_void_double.hpp"
 #include <NitroModules/JNICallable.hpp>
@@ -61,6 +62,11 @@ namespace margelo::nitro::backgroundtimer {
   void JHybridNitroBackgroundTimerSpec::clearInterval(double id) {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */)>("clearInterval");
     method(_javaPart, id);
+  }
+  std::string JHybridNitroBackgroundTimerSpec::getDebugTelemetry() {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<jni::JString>()>("getDebugTelemetry");
+    auto __result = method(_javaPart);
+    return __result->toStdString();
   }
 
 } // namespace margelo::nitro::backgroundtimer

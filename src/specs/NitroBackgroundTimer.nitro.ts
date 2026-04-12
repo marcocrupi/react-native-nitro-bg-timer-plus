@@ -12,4 +12,10 @@ export interface NitroBackgroundTimer extends HybridObject<{
     callback: (id: number) => void
   ): void
   clearInterval(id: number): void
+  /**
+   * DIAGNOSTIC ONLY (B8 step 2). Returns native fire count, first/last
+   * uptime stamps, effective interval, and thread priority as a JSON
+   * string. To be removed after Android scheduling fix is validated.
+   */
+  getDebugTelemetry(): string
 }

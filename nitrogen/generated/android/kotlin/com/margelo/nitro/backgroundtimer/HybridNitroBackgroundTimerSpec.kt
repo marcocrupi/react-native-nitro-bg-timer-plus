@@ -53,6 +53,10 @@ abstract class HybridNitroBackgroundTimerSpec: HybridObject() {
   @DoNotStrip
   @Keep
   abstract fun clearInterval(id: Double): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun getDebugTelemetry(): String
 
   // Default implementation of `HybridObject.toString()`
   override fun toString(): String {

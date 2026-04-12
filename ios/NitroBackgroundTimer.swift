@@ -194,6 +194,14 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
     }
   }
 
+  // MARK: - Diagnostic telemetry (B8 step 2, temporary)
+  // Android-only diagnostic. iOS returns a placeholder because the iOS
+  // scheduling path was fixed in commit 06eaa066 and does not need telemetry.
+  // To be removed when the Android telemetry is removed.
+  func getDebugTelemetry() -> String {
+    return "{\"platform\":\"ios\",\"note\":\"diagnostic telemetry not implemented on iOS, B8 step 2 is android-only\"}"
+  }
+
   // MARK: - Dispose (manual, JS-triggered)
   //
   // Overrides the default no-op from `HybridObject`. After `dispose()` is invoked
