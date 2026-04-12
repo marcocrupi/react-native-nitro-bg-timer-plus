@@ -13,6 +13,25 @@ export interface NitroBackgroundTimer extends HybridObject<{
   ): void
   clearInterval(id: number): void
   /**
+   * Explicitly request background mode. On Android, starts a foreground
+   * service that keeps the process at foreground scheduling priority for
+   * accurate timer delivery. Idempotent. iOS: no-op (iOS handles
+   * background scheduling natively).
+   */
+  startBackgroundMode(): void
+  /**
+   * Release explicit background mode. If timers are still active and the
+   * implicit fallback is in effect, the foreground service remains alive
+   * until the last timer completes. iOS: no-op.
+   */
+  stopBackgroundMode(): void
+  /**
+   * Configure the foreground service notification. Accepts a JSON-
+   * serialized `BackgroundTimerConfig`. Must be called before the service
+   * is active; throws otherwise. iOS: no-op.
+   */
+  configure(configJson: string): void
+  /**
    * DIAGNOSTIC ONLY (B8 step 2). Returns native fire count, first/last
    * uptime stamps, effective interval, and thread priority as a JSON
    * string. To be removed after Android scheduling fix is validated.

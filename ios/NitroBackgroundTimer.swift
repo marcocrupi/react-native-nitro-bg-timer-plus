@@ -194,6 +194,27 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
     }
   }
 
+  // MARK: - Background mode API (Android-only, no-op on iOS)
+  //
+  // iOS does not need a foreground-service equivalent: the main run loop
+  // keeps Timer instances firing as long as the background task identifier
+  // is alive (see `acquireBackgroundTask` above). The fix in commit 06eaa066
+  // (B8 step 1) already brought iOS background accuracy to 100%.
+  //
+  // These methods exist only for spec parity so consumers can write
+  // cross-platform code without platform branches.
+  func startBackgroundMode() {
+    logInfo("startBackgroundMode called on iOS — no-op (iOS handles background scheduling natively)")
+  }
+
+  func stopBackgroundMode() {
+    logInfo("stopBackgroundMode called on iOS — no-op")
+  }
+
+  func configure(configJson: String) {
+    logInfo("configure called on iOS — no-op (notification config is Android-only)")
+  }
+
   // MARK: - Diagnostic telemetry (B8 step 2, temporary)
   // Android-only diagnostic. iOS returns a placeholder because the iOS
   // scheduling path was fixed in commit 06eaa066 and does not need telemetry.

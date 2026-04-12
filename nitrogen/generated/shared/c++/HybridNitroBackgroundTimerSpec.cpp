@@ -18,6 +18,9 @@ namespace margelo::nitro::backgroundtimer {
       prototype.registerHybridMethod("clearTimeout", &HybridNitroBackgroundTimerSpec::clearTimeout);
       prototype.registerHybridMethod("setInterval", &HybridNitroBackgroundTimerSpec::setInterval);
       prototype.registerHybridMethod("clearInterval", &HybridNitroBackgroundTimerSpec::clearInterval);
+      prototype.registerHybridMethod("startBackgroundMode", &HybridNitroBackgroundTimerSpec::startBackgroundMode);
+      prototype.registerHybridMethod("stopBackgroundMode", &HybridNitroBackgroundTimerSpec::stopBackgroundMode);
+      prototype.registerHybridMethod("configure", &HybridNitroBackgroundTimerSpec::configure);
       prototype.registerHybridMethod("getDebugTelemetry", &HybridNitroBackgroundTimerSpec::getDebugTelemetry);
     });
   }

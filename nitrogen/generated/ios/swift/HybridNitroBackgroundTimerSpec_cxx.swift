@@ -179,6 +179,39 @@ open class HybridNitroBackgroundTimerSpec_cxx {
   }
   
   @inline(__always)
+  public final func startBackgroundMode() -> bridge.Result_void_ {
+    do {
+      try self.__implementation.startBackgroundMode()
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func stopBackgroundMode() -> bridge.Result_void_ {
+    do {
+      try self.__implementation.stopBackgroundMode()
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func configure(configJson: std.string) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.configure(configJson: String(configJson))
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
   public final func getDebugTelemetry() -> bridge.Result_std__string_ {
     do {
       let __result = try self.__implementation.getDebugTelemetry()

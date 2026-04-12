@@ -53,6 +53,9 @@ namespace margelo::nitro::backgroundtimer {
       virtual void clearTimeout(double id) = 0;
       virtual void setInterval(double id, double interval, const std::function<void(double /* id */)>& callback) = 0;
       virtual void clearInterval(double id) = 0;
+      virtual void startBackgroundMode() = 0;
+      virtual void stopBackgroundMode() = 0;
+      virtual void configure(const std::string& configJson) = 0;
       virtual std::string getDebugTelemetry() = 0;
 
     protected:

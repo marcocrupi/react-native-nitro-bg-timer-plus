@@ -91,6 +91,24 @@ namespace margelo::nitro::backgroundtimer {
         std::rethrow_exception(__result.error());
       }
     }
+    inline void startBackgroundMode() override {
+      auto __result = _swiftPart.startBackgroundMode();
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void stopBackgroundMode() override {
+      auto __result = _swiftPart.stopBackgroundMode();
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void configure(const std::string& configJson) override {
+      auto __result = _swiftPart.configure(configJson);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
     inline std::string getDebugTelemetry() override {
       auto __result = _swiftPart.getDebugTelemetry();
       if (__result.hasError()) [[unlikely]] {
