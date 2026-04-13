@@ -66,6 +66,12 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   private val isForegroundServiceActive = AtomicBoolean(false)
   private val isExplicitBackgroundModeRequested = AtomicBoolean(false)
 
+  // Consumer opt-out flag. Set once via `disableForegroundService()` at app
+  // startup and never reset — it is a process-lifetime declaration. The flag
+  // lives on the HybridObject instance, which is recreated on next JS runtime
+  // init, so the process-lifetime semantics are naturally enforced.
+  private val isForegroundServiceDisabled = AtomicBoolean(false)
+
   // Written only from `configure()` on the JS thread. Read from
   // `startForegroundServiceInternal()`, which is invoked both from the JS
   // thread (explicit start path and the early-start path inside
@@ -286,9 +292,17 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
    * self-healing.
    */
   private fun ensureForegroundServiceForTimer() {
+    // Consumer opt-out short-circuit: skip the FGS entirely. The wake-lock
+    // path in setTimeout/setInterval continues to run, so timers still fire
+    // — just with ~10% drift in background instead of foreground-priority
+    // accuracy. See `disableForegroundService()` Kdoc.
+    if (isForegroundServiceDisabled.get()) return
     if (isForegroundServiceActive.get()) return
     startForegroundServiceInternal()
   }
+
+  private fun hasActiveTimers(): Boolean =
+    timeoutRunnables.isNotEmpty() || intervalRunnables.isNotEmpty()
 
   /**
    * Called after a timer is cleared or fires-and-completes. Stops the
@@ -307,6 +321,13 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   override fun startBackgroundMode() {
     if (isDisposed.get()) {
       Log.w(TAG, "startBackgroundMode called on disposed instance, ignoring")
+      return
+    }
+    if (isForegroundServiceDisabled.get()) {
+      Log.w(
+        TAG,
+        "startBackgroundMode() ignored: foreground service is disabled by consumer opt-out"
+      )
       return
     }
     // CAS guarantees idempotency — second caller takes the false branch.
@@ -331,6 +352,31 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       handler.post {
         maybeStopForegroundServiceAfterClear()
       }
+    }
+  }
+
+  override fun disableForegroundService() {
+    if (isDisposed.get()) {
+      Log.w(TAG, "disableForegroundService called on disposed instance, ignoring")
+      return
+    }
+    // Guard: can only opt out before anything has touched the foreground
+    // service. If a timer is already active, an explicit mode is requested,
+    // or the FGS flag is set, we refuse — otherwise we'd leave the library
+    // in an inconsistent state where the FGS is running but new timers
+    // bypass it.
+    if (isForegroundServiceActive.get() ||
+      isExplicitBackgroundModeRequested.get() ||
+      hasActiveTimers()
+    ) {
+      throw IllegalStateException(
+        "disableForegroundService() must be called before any timer is scheduled " +
+          "and before startBackgroundMode(). Call it once at app startup."
+      )
+    }
+    // Idempotent: first caller wins the CAS, subsequent calls are silent no-ops.
+    if (isForegroundServiceDisabled.compareAndSet(false, true)) {
+      Log.i(TAG, "Foreground service disabled by consumer opt-out")
     }
   }
 

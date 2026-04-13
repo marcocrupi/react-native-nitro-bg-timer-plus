@@ -56,6 +56,7 @@ namespace margelo::nitro::backgroundtimer {
       virtual void startBackgroundMode() = 0;
       virtual void stopBackgroundMode() = 0;
       virtual void configure(const std::string& configJson) = 0;
+      virtual void disableForegroundService() = 0;
 
     protected:
       // Hybrid Setup

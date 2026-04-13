@@ -215,6 +215,10 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
     logInfo("configure called on iOS — no-op (notification config is Android-only)")
   }
 
+  func disableForegroundService() {
+    logInfo("disableForegroundService called on iOS — no-op (iOS has no foreground service concept)")
+  }
+
   // MARK: - Dispose (manual, JS-triggered)
   //
   // Overrides the default no-op from `HybridObject`. After `dispose()` is invoked

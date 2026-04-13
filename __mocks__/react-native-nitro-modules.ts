@@ -63,6 +63,22 @@ const mockNativeTimer = {
       state.isForegroundServiceActive = false
     }
   }),
+  disableForegroundService: jest.fn(() => {
+    // Mirror the native guard: refuse if a session is already in flight.
+    const hasActiveTimers = Array.from(state.timers.values()).some(
+      (t) => !t.cleared
+    )
+    if (
+      state.isForegroundServiceActive ||
+      state.isExplicitBackgroundModeRequested ||
+      hasActiveTimers
+    ) {
+      throw new Error(
+        'disableForegroundService() must be called before any timer is scheduled ' +
+          'and before startBackgroundMode().'
+      )
+    }
+  }),
   configure: jest.fn((configJson: string) => {
     // Mirror the native IllegalStateException path so test code can verify
     // it. Matches the native semantic check: block if explicit mode is
@@ -117,6 +133,7 @@ export const __mockHelpers = {
     mockNativeTimer.startBackgroundMode.mockClear()
     mockNativeTimer.stopBackgroundMode.mockClear()
     mockNativeTimer.configure.mockClear()
+    mockNativeTimer.disableForegroundService.mockClear()
   },
   disposeCalls(): number {
     return mockNativeTimer.dispose.mock.calls.length
@@ -138,5 +155,8 @@ export const __mockHelpers = {
   },
   configureCalls(): number {
     return mockNativeTimer.configure.mock.calls.length
+  },
+  disableForegroundServiceCalls(): number {
+    return mockNativeTimer.disableForegroundService.mock.calls.length
   },
 }

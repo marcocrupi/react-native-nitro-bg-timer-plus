@@ -109,6 +109,12 @@ namespace margelo::nitro::backgroundtimer {
         std::rethrow_exception(__result.error());
       }
     }
+    inline void disableForegroundService() override {
+      auto __result = _swiftPart.disableForegroundService();
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
 
   private:
     NitroBackgroundTimer::HybridNitroBackgroundTimerSpec_cxx _swiftPart;

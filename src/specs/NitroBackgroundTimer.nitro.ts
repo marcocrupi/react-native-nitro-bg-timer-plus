@@ -31,4 +31,15 @@ export interface NitroBackgroundTimer extends HybridObject<{
    * is active; throws otherwise. iOS: no-op.
    */
   configure(configJson: string): void
+  /**
+   * Disable the automatic Android foreground service fallback for the
+   * lifetime of the process. Must be called before any timer is
+   * scheduled and before `startBackgroundMode()`. Throws on Android
+   * (`IllegalStateException` → JS `Error`) if called after a timer
+   * has already activated the foreground service. Not reversible
+   * within the same process — call once at app startup. Idempotent:
+   * second and subsequent calls are silent no-ops. iOS: no-op (iOS
+   * has no foreground service concept).
+   */
+  disableForegroundService(): void
 }

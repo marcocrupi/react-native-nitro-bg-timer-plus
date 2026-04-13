@@ -20,6 +20,7 @@ public protocol HybridNitroBackgroundTimerSpec_protocol: HybridObject {
   func startBackgroundMode() throws -> Void
   func stopBackgroundMode() throws -> Void
   func configure(configJson: String) throws -> Void
+  func disableForegroundService() throws -> Void
 }
 
 public extension HybridNitroBackgroundTimerSpec_protocol {

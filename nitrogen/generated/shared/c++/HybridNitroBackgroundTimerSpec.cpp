@@ -21,6 +21,7 @@ namespace margelo::nitro::backgroundtimer {
       prototype.registerHybridMethod("startBackgroundMode", &HybridNitroBackgroundTimerSpec::startBackgroundMode);
       prototype.registerHybridMethod("stopBackgroundMode", &HybridNitroBackgroundTimerSpec::stopBackgroundMode);
       prototype.registerHybridMethod("configure", &HybridNitroBackgroundTimerSpec::configure);
+      prototype.registerHybridMethod("disableForegroundService", &HybridNitroBackgroundTimerSpec::disableForegroundService);
     });
   }
 

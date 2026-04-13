@@ -197,4 +197,25 @@ export const BackgroundTimer = {
     if (isDisposed) return
     NitroBackgroundTimer.stopBackgroundMode()
   },
+
+  /**
+   * Disables the automatic Android foreground service fallback for the
+   * lifetime of the process. Must be called before any timer is scheduled
+   * and before `startBackgroundMode()` — calling it later throws. Not
+   * reversible within the same process. Idempotent: second and subsequent
+   * calls are silent no-ops. iOS: no-op.
+   *
+   * Use this when your app does not need accurate background scheduling,
+   * or when you already have your own foreground service (e.g. media
+   * playback, location tracking) and don't want a second one. Timers
+   * keep working via the wake-lock fallback with ~10% drift in background.
+   *
+   * See the "Disabling the foreground service" section of the README for
+   * full semantics, including how to pair the runtime opt-out with
+   * `tools:node="remove"` manifest entries to eliminate the Play Store
+   * `specialUse` review friction entirely.
+   */
+  disableForegroundService(): void {
+    NitroBackgroundTimer.disableForegroundService()
+  },
 }

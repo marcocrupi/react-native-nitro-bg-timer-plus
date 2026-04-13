@@ -486,3 +486,47 @@ describe('BackgroundTimer — background mode lifecycle', () => {
     })
   })
 })
+
+describe('BackgroundTimer — disableForegroundService opt-out', () => {
+  it('forwards exactly one call to the native hybrid object', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      BackgroundTimer.disableForegroundService()
+      expect(__mockHelpers.disableForegroundServiceCalls()).toBe(1)
+    })
+  })
+
+  it('forwards every call (idempotency is enforced natively, not in JS)', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      expect(() => BackgroundTimer.disableForegroundService()).not.toThrow()
+      expect(() => BackgroundTimer.disableForegroundService()).not.toThrow()
+      expect(__mockHelpers.disableForegroundServiceCalls()).toBe(2)
+    })
+  })
+
+  it('after dispose the JS wrapper still forwards without throwing', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      BackgroundTimer.dispose()
+      // The JS wrapper intentionally adds no dispose guard — the native
+      // side owns the late-call semantics. The mock's dispose() resets
+      // timers and explicit-mode state, so the guard inside the native
+      // stub passes and the call returns cleanly.
+      expect(() => BackgroundTimer.disableForegroundService()).not.toThrow()
+      expect(__mockHelpers.disableForegroundServiceCalls()).toBe(1)
+    })
+  })
+})

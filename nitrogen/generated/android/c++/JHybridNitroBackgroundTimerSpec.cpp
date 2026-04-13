@@ -75,5 +75,9 @@ namespace margelo::nitro::backgroundtimer {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(jni::alias_ref<jni::JString> /* configJson */)>("configure");
     method(_javaPart, jni::make_jstring(configJson));
   }
+  void JHybridNitroBackgroundTimerSpec::disableForegroundService() {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void()>("disableForegroundService");
+    method(_javaPart);
+  }
 
 } // namespace margelo::nitro::backgroundtimer
