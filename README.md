@@ -2,6 +2,11 @@
 
 > A maintained fork of [react-native-nitro-bg-timer](https://github.com/tconns/react-native-nitro-bg-timer) by [Thành Công](https://github.com/tconns), continued as an independent project.
 
+[![npm version](https://img.shields.io/npm/v/react-native-nitro-bg-timer-plus.svg)](https://www.npmjs.com/package/react-native-nitro-bg-timer-plus)
+[![npm downloads](https://img.shields.io/npm/dm/react-native-nitro-bg-timer-plus.svg)](https://www.npmjs.com/package/react-native-nitro-bg-timer-plus)
+[![license](https://img.shields.io/npm/l/react-native-nitro-bg-timer-plus.svg)](https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/blob/main/LICENSE)
+[![platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android-blue.svg)](https://github.com/marcocrupi/react-native-nitro-bg-timer-plus)
+
 Native background timer for React Native built with Nitro Modules.
 
 ## Overview
