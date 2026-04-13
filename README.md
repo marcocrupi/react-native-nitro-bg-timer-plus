@@ -16,8 +16,8 @@ This module provides high-performance background timer functionality for React N
 - 📱 Cross-platform support (iOS & Android)
 - 🚀 Zero-bridge overhead with direct native calls
 - 🛡️ Three-layer cleanup defense: explicit `dispose()`, automatic Activity lifecycle hooks, GC fallback
-- 🎯 Absolute accuracy in background on Android via opt-in foreground service (`startBackgroundMode` / `stopBackgroundMode`)
-- 🔔 Automatic foreground service fallback for transparent precision without extra setup
+- 🎯 Absolute accuracy in background on Android via automatic foreground service (implicit fallback, or explicit `startBackgroundMode` / `stopBackgroundMode` for long sessions)
+- 🔔 Customizable persistent notification via `configure()` (title, text, icon, channel)
 - 🔒 Thread-safe by design — all native state serialized on a dedicated worker thread (Android) or main queue (iOS)
 - 🛡️ Graceful fallback if `WAKE_LOCK` permission is missing — no crash, just a warning
 - ✅ 39 unit tests + manual release checklist
@@ -48,10 +48,12 @@ will, however, notice two new runtime behaviors:
    [Background Mode (Android)](#background-mode-android).
 
 2. **On Android 13+, you must request the `POST_NOTIFICATIONS`
-   runtime permission** for the notification to appear. Without it,
-   the foreground service still starts, but on Android 14+ the system
-   may terminate it within ~10 seconds. Add a permission request to
-   your app's onboarding flow — a ready-to-paste snippet is in the
+   runtime permission** for the persistent notification to appear.
+   Without it, the foreground service still starts and timers still
+   run accurately, but the notification is silently hidden — your
+   users will have no visual indication that a background timer is
+   active. Add a permission request to your app's onboarding flow —
+   a ready-to-paste snippet is in the
    [Required permissions](#required-permissions) section.
 
 If you prefer the 0.2.0 behavior (no foreground service, ~10% drift
@@ -81,12 +83,12 @@ to add anything to your own `AndroidManifest.xml`:
 - `android.permission.FOREGROUND_SERVICE_SPECIAL_USE` (Android 14+)
 - `android.permission.POST_NOTIFICATIONS` (Android 13+)
 
-There is, however, **one thing you must do yourself** if your app
+There is, however, **one thing you should do yourself** if your app
 targets Android 13 or later: request the `POST_NOTIFICATIONS` runtime
 permission from the user as part of your onboarding flow. Without it,
-the foreground service still starts, but the persistent notification
-is silently hidden, and on Android 14+ the system may terminate the
-service within ~10 seconds.
+the foreground service still starts and timers run accurately, but
+the persistent notification is silently hidden — users will have no
+visual indication that a background timer is active.
 
 See the [Background Mode (Android)](#background-mode-android) section
 below for the full picture of what the foreground service does, when
@@ -351,9 +353,11 @@ permission for you — most apps already have a notification permission
 flow as part of their onboarding, and silently triggering the system
 dialog from a timer library would be surprising.
 
-If the permission is denied, the foreground service still starts but the
-notification is not shown, and on Android 14+ the system may terminate
-the service within ~10 seconds. Request the permission yourself:
+If the permission is denied, the foreground service still starts and
+timers run accurately, but the notification is silently hidden. This
+is a UX concern, not a correctness one — background timer behavior
+is unaffected. Request the permission yourself so users can see that
+a timer is active:
 
 ```ts
 import { PermissionsAndroid, Platform } from 'react-native'
@@ -696,16 +700,17 @@ BackgroundTimer.setInterval(() => {
   explicitly removed them.
 - On Android 13+, verify that your app has requested the
   `POST_NOTIFICATIONS` runtime permission. If the permission is denied,
-  the foreground service notification is hidden, and on Android 14+ the
-  system may terminate the service within ~10 seconds.
+  the foreground service notification is hidden but the service itself
+  keeps running — timer accuracy is unaffected. The absence of the
+  notification is a UX concern, not a functional one.
 - Aggressive OEM battery savers (Xiaomi, Huawei, Oppo, etc.) may still
   kill foreground services regardless of the above. Ask the user to
   whitelist your app in the device battery optimization settings.
 - The library uses Android 14's `specialUse` foreground service type,
   which has no platform-imposed time limit. If your timer still gets
-  killed, the cause is almost always either an aggressive OEM battery
-  saver (see above) or your app not having `POST_NOTIFICATIONS`
-  permission on Android 13+ (see above).
+  killed, the cause is almost always an aggressive OEM battery saver
+  (see above) — Android itself will not terminate a `specialUse`
+  foreground service based on duration alone.
 
 #### Timers not firing on iOS
 
