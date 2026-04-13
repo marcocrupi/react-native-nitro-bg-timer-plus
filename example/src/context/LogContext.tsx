@@ -37,6 +37,9 @@ export function LogProvider({ children }: { children: React.ReactNode }) {
 
   const addLog = useCallback((message: string) => {
     const entry: LogEntry = { id: nextLogId++, timestamp: formatTime(), message }
+    // Mirror every in-app log entry to the JS console so Metro / Flipper /
+    // Chrome DevTools show the same stream as the UI log section.
+    console.log(`[${entry.timestamp}] ${message}`)
     const next = [...logsRef.current, entry].slice(-MAX_LOGS)
     logsRef.current = next
     setLogs(next)

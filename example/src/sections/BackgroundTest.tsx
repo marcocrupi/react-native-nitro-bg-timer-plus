@@ -6,6 +6,14 @@ import { useLog } from '../context/LogContext'
 
 const INTERVAL = 1000
 
+// Mirrors every Alert to the JS console so Metro / Flipper / Chrome
+// DevTools surface the same content as the on-screen dialog. Useful for
+// capturing the result of manual device-side test runs without screenshots.
+function alertAndLog(title: string, message: string) {
+  console.log(`[Alert] ${title}: ${message}`)
+  Alert.alert(title, message)
+}
+
 export function BackgroundTest() {
   const [nativeTicks, setNativeTicks] = useState(0)
   const [jsTicks, setJsTicks] = useState(0)
@@ -162,12 +170,12 @@ export function BackgroundTest() {
             try {
               BackgroundTimer.disableForegroundService()
               addLog('[Background] Foreground service disabled (opt-out)')
-              Alert.alert(
+              alertAndLog(
                 'FGS disabled',
                 'Foreground service opt-out active. Timers will run in wake-lock-only mode with ~10% background drift.'
               )
             } catch (e) {
-              Alert.alert(
+              alertAndLog(
                 'Cannot disable',
                 e instanceof Error ? e.message : String(e)
               )
@@ -183,7 +191,7 @@ export function BackgroundTest() {
               BackgroundTimer.startBackgroundMode()
               addLog('[Background] Background mode started')
             } catch (e) {
-              Alert.alert('startBackgroundMode error', String(e))
+              alertAndLog('startBackgroundMode error', String(e))
             }
           }}
         >
@@ -196,7 +204,7 @@ export function BackgroundTest() {
               BackgroundTimer.stopBackgroundMode()
               addLog('[Background] Background mode stopped')
             } catch (e) {
-              Alert.alert('stopBackgroundMode error', String(e))
+              alertAndLog('stopBackgroundMode error', String(e))
             }
           }}
         >
@@ -216,7 +224,7 @@ export function BackgroundTest() {
               },
             })
             addLog('[Background] Notification configured')
-            Alert.alert(
+            alertAndLog(
               'Configure Notification',
               'Custom notification config applied. It will be used the next time the foreground service starts.'
             )
@@ -227,12 +235,12 @@ export function BackgroundTest() {
             // the user instead of showing the raw stack trace.
             const message = String(e)
             if (message.includes('background mode session is active')) {
-              Alert.alert(
+              alertAndLog(
                 'Configure Notification',
                 'Cannot change the notification while timers are running or background mode is active. Press Stop (and Stop BG Mode if active), then try again.'
               )
             } else {
-              Alert.alert('configure error', message)
+              alertAndLog('configure error', message)
             }
           }
         }}
