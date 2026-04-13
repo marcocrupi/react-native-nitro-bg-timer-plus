@@ -420,8 +420,141 @@ declaration form (or adapt it to your app's specific use case):
 > FGS use cases that don't fit other typed categories.
 
 If your app does not need accurate background timer scheduling, you
-can opt out of the foreground service entirely — see the "Disabling
-the foreground service" section (coming in a future release).
+can opt out of the foreground service entirely — see the
+[Disabling the foreground service](#disabling-the-foreground-service)
+section below.
+
+### Disabling the foreground service
+
+If your app does not need accurate background timer scheduling, or
+if you already have your own foreground service (for media playback,
+location tracking, or another purpose) and don't want a second one
+from this library, you can opt out of the foreground service
+entirely.
+
+There are **two levels of opt-out**, and which one you need depends
+on whether you want to avoid the Play Store review friction.
+
+#### Level 1 — Runtime opt-out (simple, keeps Play Store friction)
+
+Call `BackgroundTimer.disableForegroundService()` once at app startup,
+before any timer is scheduled:
+
+```ts
+import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
+
+// At the top of your app's entry point, BEFORE any timer is scheduled
+BackgroundTimer.disableForegroundService()
+```
+
+What this does:
+
+- The foreground service is never started, implicitly or explicitly
+- `startBackgroundMode()` becomes a no-op (with a warning log)
+- Timers still run, using only the `PARTIAL_WAKE_LOCK` — accuracy
+  degrades to ~10% drift in background on Android (same as
+  pre-`0.3.0`)
+- No persistent notification appears
+- **The `<service>` and `FOREGROUND_SERVICE_SPECIAL_USE` permission
+  remain in the merged manifest**, so Play Store review still asks
+  for the `specialUse` justification
+
+This is the easy path — one line of code, no manifest surgery. Use
+it if you're OK with Play Store friction but just want to disable
+the FGS at runtime.
+
+**Important**: `disableForegroundService()` must be called before
+any timer is scheduled. Calling it after a timer has already
+activated the foreground service throws an `Error`. Call it once
+at app startup, typically in your root component or in your
+`index.js` / `App.tsx`.
+
+The call is not reversible within the same process. To re-enable
+the foreground service, kill and restart the app without the call.
+
+#### Level 2 — Manifest removal (zero Play Store friction)
+
+If you also want to remove the `<service>` declaration and the
+`FOREGROUND_SERVICE_SPECIAL_USE` permission from your final APK
+so that Play Store review does not ask you to justify a foreground
+service you're not using, add the following to your app's
+`android/app/src/main/AndroidManifest.xml`:
+
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Opt out of react-native-nitro-bg-timer-plus foreground service -->
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE"
+        tools:node="remove" />
+
+    <application>
+        <service
+            android:name="com.margelo.nitro.backgroundtimer.NitroBackgroundTimerService"
+            tools:node="remove" />
+
+        <!-- rest of your application element -->
+    </application>
+</manifest>
+```
+
+Note the `xmlns:tools` namespace declaration on the root `<manifest>`
+element — it's required for `tools:node="remove"` to work.
+
+What this does:
+
+- The `<service>` and both `FOREGROUND_SERVICE*` permissions are
+  stripped from the merged manifest at build time
+- The final APK contains neither the service class declaration nor
+  the permissions
+- Play Store review does not see the `specialUse` foreground service
+  and does not ask you to justify it
+- The `POST_NOTIFICATIONS` and `WAKE_LOCK` permissions remain, since
+  they're still used by the library for the wake-lock-only fallback
+
+**Important**: if you do manifest removal (Level 2), you should
+also do runtime opt-out (Level 1). Without runtime opt-out, the
+library will still attempt to call `startForegroundService()`
+at runtime, Android will throw because the service class isn't
+declared, the library's exception handler will catch it and fall
+back to wake-lock-only mode, but you'll see one exception per
+timer activation in the logs. Combining both levels gives you a
+clean, silent wake-lock-only mode.
+
+Recommended combined setup:
+
+```ts
+// src/index.tsx or App.tsx, before any timer
+import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
+BackgroundTimer.disableForegroundService()
+```
+
+```xml
+<!-- android/app/src/main/AndroidManifest.xml -->
+<uses-permission
+    android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+    tools:node="remove" />
+<uses-permission
+    android:name="android.permission.FOREGROUND_SERVICE"
+    tools:node="remove" />
+<service
+    android:name="com.margelo.nitro.backgroundtimer.NitroBackgroundTimerService"
+    tools:node="remove" />
+```
+
+#### Decision matrix
+
+| Scenario | Level 1 (runtime) | Level 2 (manifest) | Play Store review asks about FGS |
+| --- | --- | --- | --- |
+| Keep FGS as default (accurate background timers) | no | no | Yes, must justify `specialUse` |
+| Disable FGS in one specific build variant | yes | no | Yes (manifest still has it) |
+| App already has its own FGS (notifee, etc.) | yes | yes | No |
+| Accept ~10% drift, want zero friction | yes | yes | No |
+| Foreground-only app (never backgrounds) | yes | yes | No |
 
 ## Real-world Examples
 
