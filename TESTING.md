@@ -168,6 +168,34 @@ foreground service active, the drift must be near zero.
       ~10 seconds; a `Foreground service stopped` or service death line
       should follow — this is documented as a known limitation, not a bug
 
+### A15 — Long background run does not ANR (B11 regression gate)
+
+Purpose: verify that the foreground service does not crash with an ANR
+after 3 minutes (regression gate for the B11 fix that switched from
+`shortService` to `specialUse`).
+
+- [ ] Kill the example app, reinstall, reopen
+- [ ] Grant `POST_NOTIFICATIONS` permission if prompted
+- [ ] Tap **Start BG Mode** in the Background Test section
+- [ ] Verify the persistent notification appears
+- [ ] Tap **Start** on Background Test 3 to start a 1-second interval
+- [ ] Press the home button to background the app
+- [ ] Lock the screen
+- [ ] **Wait 5 minutes** (timed)
+- [ ] Unlock the screen and return to the app
+- [ ] Wait 5 seconds for JS counters to settle
+- [ ] Verify the timer is still running and accurate (Native ≈ Expected)
+- [ ] Check `adb logcat | grep -E "ANR|Short FGS"` — should show **no**
+      ANR or `Short FGS` messages for `com.nitrobgtimerexample`
+
+Expected: timer fires continuously for 5+ minutes without ANR,
+notification stays visible, Native and Expected counters remain aligned
+within 1-2 units.
+
+Failure mode if regressed: the app would crash with `Short FGS ANR'ed`
+followed by `ANR in com.nitrobgtimerexample` in logcat, and the example
+app would disappear from the recents.
+
 ## iOS tests
 
 ### I1 — Basic timer functionality

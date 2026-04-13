@@ -78,7 +78,7 @@ to add anything to your own `AndroidManifest.xml`:
 
 - `android.permission.WAKE_LOCK`
 - `android.permission.FOREGROUND_SERVICE`
-- `android.permission.FOREGROUND_SERVICE_SHORT_SERVICE` (Android 14+)
+- `android.permission.FOREGROUND_SERVICE_SPECIAL_USE` (Android 14+)
 - `android.permission.POST_NOTIFICATIONS` (Android 13+)
 
 There is, however, **one thing you must do yourself** if your app
@@ -341,7 +341,7 @@ this to work:
 
 - `android.permission.WAKE_LOCK`
 - `android.permission.FOREGROUND_SERVICE`
-- `android.permission.FOREGROUND_SERVICE_SHORT_SERVICE` (API 34+)
+- `android.permission.FOREGROUND_SERVICE_SPECIAL_USE` (API 34+)
 - `android.permission.POST_NOTIFICATIONS` (API 33+)
 
 `POST_NOTIFICATIONS` is a **runtime permission** starting on Android 13,
@@ -370,13 +370,54 @@ async function ensureNotificationPermission() {
 
 ### Limitations
 
-- The service uses the `shortService` foreground type introduced in
-  Android 14. Cumulative duration is capped at **3 hours** per the
-  platform contract. For timers that need to run longer than 3 hours,
-  use `AlarmManager` or `WorkManager` at the application level — they
-  are the correct primitives for long-running scheduled work.
+- The foreground service uses Android 14's `specialUse` foreground
+  service type. There is **no platform-imposed time limit** on how
+  long the service can run, but on Android 14+ your app must declare
+  the `specialUse` subtype in the Play Console during review (see
+  "Play Store review notes" below).
+- Aggressive OEM battery savers (Xiaomi, Huawei, Oppo, Samsung with
+  restrictive power management profiles, etc.) may still kill
+  background services regardless of foreground service type. Ask
+  users to whitelist your app in the device battery optimization
+  settings.
 - iOS is unaffected: `startBackgroundMode`, `stopBackgroundMode`, and
-  `configure` are no-ops on iOS.
+  `configure` are no-ops on iOS. iOS handles background timer
+  accuracy natively through `beginBackgroundTask`.
+
+### Play Store review notes
+
+Android 14 (API 34) introduced stricter declarations for foreground
+service types. Apps that declare `specialUse` must justify it in the
+Play Console during the review process, in the "Foreground service"
+section of the app content declaration.
+
+The library's foreground service is declared with the subtype
+`continue_user_initiated_background_timer`. When submitting your app
+to Play Store, paste the following justification in the FGS
+declaration form (or adapt it to your app's specific use case):
+
+> This app uses a foreground service of type `specialUse` to keep a
+> user-initiated background timer running with accurate scheduling
+> while the app is in the background. The service is started only
+> after the user explicitly initiates a timer (e.g. starting a
+> workout, a recording, or a tracking session). The service is
+> stopped automatically when the timer completes or when the user
+> cancels it. The use case does not fit other FGS types:
+>
+> - `mediaPlayback`: not playing media
+> - `location`: not tracking location
+> - `dataSync`: not synchronizing data with a server or device
+> - `health`: not specifically a health/fitness measurement
+> - `shortService`: timer duration is variable and may exceed the
+>   ~3 minute shortService limit
+>
+> Therefore `specialUse` is the appropriate type per Android's
+> documentation, which defines it as the catch-all for legitimate
+> FGS use cases that don't fit other typed categories.
+
+If your app does not need accurate background timer scheduling, you
+can opt out of the foreground service entirely — see the "Disabling
+the foreground service" section (coming in a future release).
 
 ## Real-world Examples
 
@@ -649,7 +690,7 @@ BackgroundTimer.setInterval(() => {
 
 #### Timers stop working in background (Android)
 
-- The `WAKE_LOCK`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SHORT_SERVICE`,
+- The `WAKE_LOCK`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`,
   and `POST_NOTIFICATIONS` permissions are all declared by the library
   manifest and merged automatically — no action needed unless you have
   explicitly removed them.
@@ -660,10 +701,11 @@ BackgroundTimer.setInterval(() => {
 - Aggressive OEM battery savers (Xiaomi, Huawei, Oppo, etc.) may still
   kill foreground services regardless of the above. Ask the user to
   whitelist your app in the device battery optimization settings.
-- For timers longer than 3 hours of cumulative runtime, the `shortService`
-  foreground type reaches its platform-imposed duration limit and the
-  service is terminated by the system. Use `AlarmManager` or `WorkManager`
-  at the application level for long-running scheduled work.
+- The library uses Android 14's `specialUse` foreground service type,
+  which has no platform-imposed time limit. If your timer still gets
+  killed, the cause is almost always either an aggressive OEM battery
+  saver (see above) or your app not having `POST_NOTIFICATIONS`
+  permission on Android 13+ (see above).
 
 #### Timers not firing on iOS
 

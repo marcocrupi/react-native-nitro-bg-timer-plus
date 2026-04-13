@@ -54,9 +54,8 @@ class NitroBackgroundTimerService : Service() {
     try {
       val notification = buildNotification(config)
       // API 34+ (UPSIDE_DOWN_CAKE) requires passing the foreground service
-      // type explicitly for specialUse, shortService, and the other API-34
-      // types. On older APIs the 2-arg form remains valid and uses the
-      // manifest-declared type.
+      // type explicitly for the new API-34 typed services. On older APIs
+      // the 2-arg form remains valid and uses the manifest-declared type.
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
         startForeground(
           NOTIFICATION_ID,

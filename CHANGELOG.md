@@ -11,13 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Android foreground service type changed from `shortService` to `specialUse`.** The 0.3.0 release used `shortService`, which Android terminates with an ANR after ~3 minutes (the actual platform contract — the "3 hour" claim in 0.3.0 docs was incorrect). `specialUse` has no platform-imposed timeout and is the correct semantic category for a user-initiated background timer of arbitrary duration. **Consumers inherit the `FOREGROUND_SERVICE_SPECIAL_USE` permission instead of `FOREGROUND_SERVICE_SHORT_SERVICE` via manifest merge.** During Play Store review, consumers must justify the `specialUse` declaration — see the "Play Store review notes" section in the README for a ready-to-paste justification paragraph.
+
 ### Fixed
+
+- **Critical: example app no longer ANRs after ~3 minutes of background timer activity.** Caused by the `shortService` foreground service type timeout (see Changed above). Confirmed empirically on Pixel 9 Pro XL Android stock with the system logging `Short FGS ANR'ed` followed by `ANR in com.nitrobgtimerexample / Reason: A foreground service of FOREGROUND_SERVICE_TYPE_SHORT_SERVICE did not stop within a timeout`. Fix: switch to `specialUse` foreground service type, which has no platform-imposed timeout.
+- **Documentation correction for 0.3.0**: README, CHANGELOG, KDoc, and TESTING.md previously stated a "3 hour cumulative cap" for the `shortService` foreground service type. The actual platform contract is approximately 3 minutes. The 3-hour claim was based on misreading the Android 14 documentation during B9 design. All references corrected in this release.
 
 ### Removed
 
 ### Security
 
 ## [0.3.0] - 2026-04-12
+
+> **Correction (post-release)**: this release's claim that the `shortService` foreground service type has a "3 hour cumulative cap" is **incorrect**. The actual platform contract is approximately 3 minutes. Apps using 0.3.0 will hit an ANR after ~3 minutes of an active background timer. **Upgrade to the next release immediately.** The fix switches the foreground service type from `shortService` to `specialUse`, which has no platform-imposed timeout.
 
 ### Added
 
