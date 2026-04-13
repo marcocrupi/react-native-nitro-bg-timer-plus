@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+### Security
+
+## [0.3.1] - 2026-04-13
+
+### Added
+
 - **`BackgroundTimer.disableForegroundService()` API** — new opt-out method for consumers who don't need accurate background timers or already have their own foreground service (notifee, media playback, location tracking, etc.). Must be called before any timer is scheduled and before `startBackgroundMode()`; throws `IllegalStateException` (mapped to JS `Error`) if called late. Not reversible within the same process. Idempotent. Wake-lock path continues to run — timers still fire, just with ~10% drift in background instead of foreground-priority accuracy. No-op on iOS (iOS has no foreground service concept and achieves background accuracy natively via `beginBackgroundTask`). See the new "Disabling the foreground service" README section for full semantics, including how to pair the runtime opt-out with `tools:node="remove"` manifest entries in the consumer app to strip the `<service>` declaration and the `FOREGROUND_SERVICE_SPECIAL_USE` permission from the merged manifest and eliminate the Play Store `specialUse` review friction entirely.
 
 ### Changed
@@ -160,7 +172,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TypeScript API wrapper with callback management
 - Full API documentation and usage examples in README
 
-[Unreleased]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.0.1...v0.1.0
