@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -22,11 +23,15 @@ import androidx.core.app.NotificationCompat
  * is scheduled, and stopped when both the explicit flag is cleared and no
  * timers remain active.
  *
- * Declared as `foregroundServiceType="shortService"` (API 34+) which is the
- * category intended for generic short-lived user-visible tasks that don't
- * fit other semantic categories. Max cumulative duration is 3 hours on API
- * 34+; longer timers should use AlarmManager/WorkManager at the consumer
- * level — documented as a known limitation.
+ * Declared as `foregroundServiceType="specialUse"` (API 34+) with the
+ * `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` manifest property set to
+ * `continue_user_initiated_background_timer`. `specialUse` is the documented
+ * catch-all for valid foreground service use cases not covered by typed
+ * categories (`mediaPlayback`, `location`, `dataSync`, `health`, etc.), and
+ * has no platform-imposed cumulative timeout — the correct semantic category
+ * for a user-initiated background timer of arbitrary duration. Consumers
+ * must justify the declaration in the Play Console FGS section during
+ * review; a ready-to-paste paragraph is in the README.
  */
 class NitroBackgroundTimerService : Service() {
 
@@ -48,7 +53,19 @@ class NitroBackgroundTimerService : Service() {
 
     try {
       val notification = buildNotification(config)
-      startForeground(NOTIFICATION_ID, notification)
+      // API 34+ (UPSIDE_DOWN_CAKE) requires passing the foreground service
+      // type explicitly for specialUse, shortService, and the other API-34
+      // types. On older APIs the 2-arg form remains valid and uses the
+      // manifest-declared type.
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        startForeground(
+          NOTIFICATION_ID,
+          notification,
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        )
+      } else {
+        startForeground(NOTIFICATION_ID, notification)
+      }
     } catch (e: Exception) {
       // On API 31+ this can throw ForegroundServiceStartNotAllowedException;
       // on API 34+ it can throw ForegroundServiceDidNotStartInTimeException
