@@ -306,7 +306,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   btnDisabled: { opacity: 0.5 },
-  btnText: { color: '#fff', fontWeight: '600', fontSize: 14 },
+  btnText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
+    textAlign: 'center',
+  },
   toggleBtn: {
     alignItems: 'center',
     paddingVertical: 8,
