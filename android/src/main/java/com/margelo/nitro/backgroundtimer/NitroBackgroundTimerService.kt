@@ -66,10 +66,10 @@ class NitroBackgroundTimerService : Service() {
         startForeground(NOTIFICATION_ID, notification)
       }
     } catch (e: Exception) {
-      // On API 31+ this can throw ForegroundServiceStartNotAllowedException;
-      // on API 34+ it can throw ForegroundServiceDidNotStartInTimeException
-      // when the process lacks a qualifying starting condition. We log and
-      // bail — the wake-lock-only fallback is still in effect for the timer.
+      // On API 31+ the system can refuse the start with
+      // ForegroundServiceStartNotAllowedException (e.g. background-start
+      // restriction, missing POST_NOTIFICATIONS on API 34+). We log and
+      // bail — the wake-lock-only fallback remains in effect for timers.
       Log.w(TAG, "startForeground failed, service will stop", e)
       stopSelf(startId)
     }
