@@ -1,5 +1,7 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import {
+  PermissionsAndroid,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -18,6 +20,14 @@ import { HookTest } from './src/sections/HookTest'
 import { StressTest } from './src/sections/StressTest'
 
 function App() {
+  useEffect(() => {
+    if (Platform.OS === 'android' && Platform.Version >= 33) {
+      PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+      ).catch(() => {})
+    }
+  }, [])
+
   return (
     <SafeAreaProvider>
     <LogProvider>
