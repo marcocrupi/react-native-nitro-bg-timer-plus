@@ -157,6 +157,26 @@ export function BackgroundTest() {
       {/* B9 — background mode controls (Android foreground service). */}
       <View style={styles.bgModeRow}>
         <Pressable
+          style={[styles.btn, styles.btnGrey]}
+          onPress={() => {
+            try {
+              BackgroundTimer.disableForegroundService()
+              addLog('[Background] Foreground service disabled (opt-out)')
+              Alert.alert(
+                'FGS disabled',
+                'Foreground service opt-out active. Timers will run in wake-lock-only mode with ~10% background drift.'
+              )
+            } catch (e) {
+              Alert.alert(
+                'Cannot disable',
+                e instanceof Error ? e.message : String(e)
+              )
+            }
+          }}
+        >
+          <Text style={styles.btnText}>Disable FGS (opt-out)</Text>
+        </Pressable>
+        <Pressable
           style={[styles.btn, styles.btnBlue]}
           onPress={() => {
             try {
