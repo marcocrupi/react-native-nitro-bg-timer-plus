@@ -20,7 +20,7 @@ This module provides high-performance background timer functionality for React N
 - 🔔 Customizable persistent notification via `configure()` (title, text, icon, channel)
 - 🔒 Thread-safe by design — all native state serialized on a dedicated worker thread (Android) or main queue (iOS)
 - 🛡️ Graceful fallback if `WAKE_LOCK` permission is missing — no crash, just a warning
-- ✅ 39 unit tests + manual release checklist
+- ✅ 42 unit tests + manual release checklist
 
 ## Requirements
 
@@ -125,7 +125,7 @@ BackgroundTimer.clearInterval(intervalId)
 ### Important — Android background behavior
 
 When a timer is active and your app moves to background, this library
-automatically starts a short foreground service that keeps your host
+automatically starts a foreground service that keeps your host
 process at foreground scheduling priority. This is what makes background
 timer accuracy reliable on Android (without this, `setInterval` drifts
 by roughly 10% in background).
@@ -272,7 +272,7 @@ On Android, background processes are throttled by the `bg_non_interactive`
 cgroup, which limits CPU quota and causes `setInterval` / `setTimeout`
 ticks to drift by roughly 10% even with a partial wake lock and a
 foreground-priority worker thread. To achieve absolute timer accuracy in
-background, this library can run a short **foreground service** that
+background, this library can run a **foreground service** that
 keeps the host process at foreground scheduling priority while timers
 are active.
 
