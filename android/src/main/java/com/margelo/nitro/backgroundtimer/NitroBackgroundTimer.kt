@@ -49,6 +49,8 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   // serialized on the worker thread — no measurable overhead.
   private val timeoutRunnables = ConcurrentHashMap<Int, Runnable>()
   private val intervalRunnables = ConcurrentHashMap<Int, Runnable>()
+  private val acceptedTimeoutIds = ConcurrentHashMap<Int, Boolean>()
+  private val acceptedIntervalIds = ConcurrentHashMap<Int, Boolean>()
 
   // AtomicBoolean (not `@Volatile Boolean`) because `dispose()` uses
   // `compareAndSet(false, true)` to ensure exactly one thread wins the
@@ -152,7 +154,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
    * Instead, wake lock lifetime is managed **explicitly** via these cleanup paths:
    *
    *  1. `clearTimeout` / `clearInterval` / runnable natural completion
-   *     → `releaseWakeLockIfNeeded()` (count-via-map)
+   *     → `releaseWakeLockIfNeeded()` (count-via-map plus accepted timer state)
    *  2. `dispose()` → `cleanupAll()` → explicit release
    *  3. `onHostDestroy()` (Activity destroy, via `LifecycleEventListener`)
    *     → `dispose()` → `cleanupAll()`
@@ -183,7 +185,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   }
 
   private fun releaseWakeLockIfNeeded() {
-    if (timeoutRunnables.isEmpty() && intervalRunnables.isEmpty() && wakeLock.isHeld) {
+    if (!hasTimerState() && wakeLock.isHeld) {
       try {
         wakeLock.release()
         if (BuildConfig.DEBUG) {
@@ -200,6 +202,8 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     intervalRunnables.values.forEach { handler.removeCallbacks(it) }
     timeoutRunnables.clear()
     intervalRunnables.clear()
+    acceptedTimeoutIds.clear()
+    acceptedIntervalIds.clear()
     if (wakeLock.isHeld) {
       try {
         wakeLock.release()
@@ -310,8 +314,11 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     startForegroundServiceInternal()
   }
 
-  private fun hasActiveTimers(): Boolean =
-    timeoutRunnables.isNotEmpty() || intervalRunnables.isNotEmpty()
+  private fun hasTimerState(): Boolean =
+    acceptedTimeoutIds.isNotEmpty() ||
+      acceptedIntervalIds.isNotEmpty() ||
+      timeoutRunnables.isNotEmpty() ||
+      intervalRunnables.isNotEmpty()
 
   /**
    * Called after a timer is cleared or fires-and-completes. Stops the
@@ -322,7 +329,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
    */
   private fun maybeStopForegroundServiceAfterClear() {
     if (isExplicitBackgroundModeRequested.get()) return
-    if (timeoutRunnables.isNotEmpty() || intervalRunnables.isNotEmpty()) return
+    if (hasTimerState()) return
     stopForegroundServiceInternal()
   }
 
@@ -354,19 +361,20 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     return posted
   }
 
-  private fun prepareTimerSchedule(operation: String): Boolean =
+  private fun prepareTimerSchedule(operation: String, acceptTimer: () -> Unit): Boolean =
     synchronized(lifecycleLock) {
       if (isDisposed.get()) {
         Log.w(TAG, "$operation called on disposed instance, ignoring")
         false
       } else {
+        acceptTimer()
         ensureForegroundServiceForTimer()
         true
       }
     }
 
   private fun rollbackRejectedSchedule() {
-    if (!isExplicitBackgroundModeRequested.get() && !hasActiveTimers()) {
+    if (!isExplicitBackgroundModeRequested.get() && !hasTimerState()) {
       stopForegroundServiceInternal()
     }
   }
@@ -421,7 +429,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     // bypass it.
     if (isForegroundServiceActive.get() ||
       isExplicitBackgroundModeRequested.get() ||
-      hasActiveTimers()
+      hasTimerState()
     ) {
       throw IllegalStateException(
         "disableForegroundService() must be called before any timer is scheduled " +
@@ -453,8 +461,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     // meant to catch, while allowing the "stopBackgroundMode, then
     // immediately reconfigure for the next session" pattern to succeed.
     if (isExplicitBackgroundModeRequested.get() ||
-        timeoutRunnables.isNotEmpty() ||
-        intervalRunnables.isNotEmpty()) {
+        hasTimerState()) {
       throw IllegalStateException(
         "BackgroundTimer.configure() cannot be called while a background " +
           "mode session is active. Stop timers and call stopBackgroundMode() first."
@@ -487,12 +494,17 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     // hasn't called startBackgroundMode() explicitly. Called from the JS
     // thread before posting so the service request beats the timer race
     // against a quick app-background transition.
-    if (!prepareTimerSchedule("setTimeout")) return
+    val intId = id.toInt()
+    var acceptedNewTimer = false
+    if (!prepareTimerSchedule("setTimeout") {
+      acceptedNewTimer = acceptedTimeoutIds.put(intId, true) == null
+    }) return
 
     val posted = postToWorker("setTimeout($id)") {
       synchronized(lifecycleLock) {
         if (isDisposed.get()) {
           Log.w(TAG, "setTimeout($id) ignored after dispose")
+          acceptedTimeoutIds.remove(intId)
           return@synchronized
         }
         // Safety net: between the JS-thread check above and this worker-side
@@ -502,10 +514,10 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         ensureForegroundServiceForTimer()
         if (isDisposed.get()) {
           Log.w(TAG, "setTimeout($id) ignored after dispose")
+          acceptedTimeoutIds.remove(intId)
           return@synchronized
         }
 
-        val intId = id.toInt()
         // inline-clear previous timer with same id (no re-post to avoid deadlock-free but wasteful double-hop)
         timeoutRunnables[intId]?.let { handler.removeCallbacks(it) }
         timeoutRunnables.remove(intId)
@@ -518,6 +530,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
             Log.e(TAG, "Callback error in setTimeout($id): ${e.message}", e)
           }
           timeoutRunnables.remove(intId)
+          acceptedTimeoutIds.remove(intId)
           releaseWakeLockIfNeeded()
           maybeStopForegroundServiceAfterClear()
         }
@@ -525,6 +538,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         timeoutRunnables[intId] = runnable
         if (!postDelayedToWorker("setTimeout($id)", runnable, duration.toLong())) {
           timeoutRunnables.remove(intId, runnable)
+          acceptedTimeoutIds.remove(intId)
           releaseWakeLockIfNeeded()
           maybeStopForegroundServiceAfterClear()
           return@synchronized
@@ -533,6 +547,9 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       }
     }
     if (!posted) {
+      if (acceptedNewTimer) {
+        acceptedTimeoutIds.remove(intId)
+      }
       rollbackRejectedSchedule()
     }
   }
@@ -543,6 +560,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       val intId = id.toInt()
       timeoutRunnables[intId]?.let { handler.removeCallbacks(it) }
       timeoutRunnables.remove(intId)
+      acceptedTimeoutIds.remove(intId)
       releaseWakeLockIfNeeded()
       maybeStopForegroundServiceAfterClear()
     }
@@ -550,22 +568,27 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
 
   // --- Interval ---
   override fun setInterval(id: Double, interval: Double, callback: (Double) -> Unit) {
-    if (!prepareTimerSchedule("setInterval")) return
+    val intId = id.toInt()
+    var acceptedNewTimer = false
+    if (!prepareTimerSchedule("setInterval") {
+      acceptedNewTimer = acceptedIntervalIds.put(intId, true) == null
+    }) return
 
     val posted = postToWorker("setInterval($id)") {
       synchronized(lifecycleLock) {
         if (isDisposed.get()) {
           Log.w(TAG, "setInterval($id) ignored after dispose")
+          acceptedIntervalIds.remove(intId)
           return@synchronized
         }
         // Safety net: see equivalent comment in setTimeout above.
         ensureForegroundServiceForTimer()
         if (isDisposed.get()) {
           Log.w(TAG, "setInterval($id) ignored after dispose")
+          acceptedIntervalIds.remove(intId)
           return@synchronized
         }
 
-        val intId = id.toInt()
         intervalRunnables[intId]?.let { handler.removeCallbacks(it) }
         intervalRunnables.remove(intId)
 
@@ -583,6 +606,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
               val rescheduled = postDelayedToWorker("setInterval($id)", this, interval.toLong())
               if (!rescheduled) {
                 intervalRunnables.remove(intId, this)
+                acceptedIntervalIds.remove(intId)
                 releaseWakeLockIfNeeded()
                 maybeStopForegroundServiceAfterClear()
               }
@@ -593,6 +617,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         intervalRunnables[intId] = runnable
         if (!postDelayedToWorker("setInterval($id)", runnable, interval.toLong())) {
           intervalRunnables.remove(intId, runnable)
+          acceptedIntervalIds.remove(intId)
           releaseWakeLockIfNeeded()
           maybeStopForegroundServiceAfterClear()
           return@synchronized
@@ -601,6 +626,9 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       }
     }
     if (!posted) {
+      if (acceptedNewTimer) {
+        acceptedIntervalIds.remove(intId)
+      }
       rollbackRejectedSchedule()
     }
   }
@@ -611,6 +639,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       val intId = id.toInt()
       intervalRunnables[intId]?.let { handler.removeCallbacks(it) }
       intervalRunnables.remove(intId)
+      acceptedIntervalIds.remove(intId)
       releaseWakeLockIfNeeded()
       maybeStopForegroundServiceAfterClear()
     }

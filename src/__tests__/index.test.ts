@@ -477,6 +477,9 @@ describe('BackgroundTimer — background mode lifecycle', () => {
       const cb = jest.fn()
       const id = BackgroundTimer.setTimeout(cb, 100)
       __mockHelpers.fireTimer(id)
+      expect(__mockHelpers.isTimerAccepted(id)).toBe(false)
+      expect(__mockHelpers.isTimerPending(id)).toBe(false)
+      expect(__mockHelpers.isTimerActive(id)).toBe(false)
       // After the timeout fires, both native and mock remove it from the
       // active map. configure should then allow — no live session is
       // holding the service open.
@@ -487,16 +490,19 @@ describe('BackgroundTimer — background mode lifecycle', () => {
     })
   })
 
-  it('configure is blocked while a setTimeout is still active', () => {
+  it('configure is blocked immediately after setTimeout is accepted', () => {
     jest.isolateModules(() => {
       const { BackgroundTimer } = require('../index')
       const {
         __mockHelpers,
       } = require('../../__mocks__/react-native-nitro-modules')
       __mockHelpers.reset()
-      BackgroundTimer.setTimeout(() => {}, 1000)
+      const id = BackgroundTimer.setTimeout(() => {}, 1000)
+      expect(__mockHelpers.isTimerAccepted(id)).toBe(true)
+      expect(__mockHelpers.isTimerPending(id)).toBe(true)
+      expect(__mockHelpers.isTimerActive(id)).toBe(false)
       // The implicit fallback keeps the service alive while the timer is
-      // pending, and the notification is visible to the user.
+      // accepted/pending, before the Android worker materializes the active map.
       // configure() must throw to prevent mid-visible reconfiguration.
       expect(() =>
         BackgroundTimer.configure({ notification: { title: 'Mid' } })
@@ -505,6 +511,62 @@ describe('BackgroundTimer — background mode lifecycle', () => {
       // throw), but no config was stored because the throw happened
       // before the assignment.
       expect(__mockHelpers.lastConfigJson()).toBeNull()
+    })
+  })
+
+  it('configure is blocked immediately after setInterval is accepted', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      const id = BackgroundTimer.setInterval(() => {}, 1000)
+      expect(__mockHelpers.isTimerAccepted(id)).toBe(true)
+      expect(__mockHelpers.isTimerPending(id)).toBe(true)
+      expect(__mockHelpers.isTimerActive(id)).toBe(false)
+      expect(() =>
+        BackgroundTimer.configure({ notification: { title: 'Mid' } })
+      ).toThrow(/background mode session is active/)
+      expect(__mockHelpers.lastConfigJson()).toBeNull()
+    })
+  })
+
+  it('configure succeeds after clearTimeout removes an accepted timer', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      const id = BackgroundTimer.setTimeout(() => {}, 1000)
+      BackgroundTimer.clearTimeout(id)
+      expect(__mockHelpers.isTimerAccepted(id)).toBe(false)
+      expect(__mockHelpers.isTimerPending(id)).toBe(false)
+      expect(__mockHelpers.isTimerActive(id)).toBe(false)
+      expect(() =>
+        BackgroundTimer.configure({ notification: { title: 'After clear' } })
+      ).not.toThrow()
+      expect(__mockHelpers.configureCalls()).toBe(1)
+    })
+  })
+
+  it('configure succeeds after clearInterval removes an accepted timer', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      const id = BackgroundTimer.setInterval(() => {}, 1000)
+      BackgroundTimer.clearInterval(id)
+      expect(__mockHelpers.isTimerAccepted(id)).toBe(false)
+      expect(__mockHelpers.isTimerPending(id)).toBe(false)
+      expect(__mockHelpers.isTimerActive(id)).toBe(false)
+      expect(() =>
+        BackgroundTimer.configure({ notification: { title: 'After clear' } })
+      ).not.toThrow()
+      expect(__mockHelpers.configureCalls()).toBe(1)
     })
   })
 })

@@ -10,15 +10,59 @@ interface CapturedTimer {
 
 const state = {
   timers: new Map<number, CapturedTimer>(),
+  pendingTimers: new Map<number, CapturedTimer>(),
+  acceptedTimers: new Map<number, CapturedTimer>(),
+  inactiveTimerIds: new Set<number>(),
   isForegroundServiceActive: false,
   isExplicitBackgroundModeRequested: false,
   lastConfigJson: null as string | null,
 }
 
+const hasAcceptedTimers = () => state.acceptedTimers.size > 0
+
+const updateImplicitForegroundService = () => {
+  if (!state.isExplicitBackgroundModeRequested && !hasAcceptedTimers()) {
+    state.isForegroundServiceActive = false
+  }
+}
+
+const acceptTimer = (timer: CapturedTimer) => {
+  state.inactiveTimerIds.delete(timer.id)
+  state.acceptedTimers.set(timer.id, timer)
+  state.pendingTimers.set(timer.id, timer)
+  state.isForegroundServiceActive = true
+}
+
+const clearAcceptedTimer = (id: number) => {
+  const timer = state.acceptedTimers.get(id)
+  if (timer) {
+    timer.cleared = true
+    state.inactiveTimerIds.add(id)
+  }
+  state.pendingTimers.delete(id)
+  state.timers.delete(id)
+  state.acceptedTimers.delete(id)
+  updateImplicitForegroundService()
+}
+
+const materializeTimer = (id: number) => {
+  const activeTimer = state.timers.get(id)
+  if (activeTimer) return activeTimer
+
+  const pendingTimer = state.pendingTimers.get(id)
+  if (!pendingTimer) return undefined
+
+  state.pendingTimers.delete(id)
+  if (!pendingTimer.cleared) {
+    state.timers.set(id, pendingTimer)
+  }
+  return pendingTimer
+}
+
 const mockNativeTimer = {
   setTimeout: jest.fn(
     (id: number, duration: number, callback: TimerCallback) => {
-      state.timers.set(id, {
+      acceptTimer({
         id,
         duration,
         callback,
@@ -28,12 +72,11 @@ const mockNativeTimer = {
     }
   ),
   clearTimeout: jest.fn((id: number) => {
-    const t = state.timers.get(id)
-    if (t) t.cleared = true
+    clearAcceptedTimer(id)
   }),
   setInterval: jest.fn(
     (id: number, interval: number, callback: TimerCallback) => {
-      state.timers.set(id, {
+      acceptTimer({
         id,
         duration: interval,
         callback,
@@ -43,11 +86,13 @@ const mockNativeTimer = {
     }
   ),
   clearInterval: jest.fn((id: number) => {
-    const t = state.timers.get(id)
-    if (t) t.cleared = true
+    clearAcceptedTimer(id)
   }),
   dispose: jest.fn(() => {
     state.timers.clear()
+    state.pendingTimers.clear()
+    state.acceptedTimers.clear()
+    state.inactiveTimerIds.clear()
     state.isForegroundServiceActive = false
     state.isExplicitBackgroundModeRequested = false
     state.lastConfigJson = null
@@ -59,13 +104,13 @@ const mockNativeTimer = {
   stopBackgroundMode: jest.fn(() => {
     state.isExplicitBackgroundModeRequested = false
     // Only stop the service if no timers hold it up via the implicit fallback.
-    if (state.timers.size === 0) {
+    if (!hasAcceptedTimers()) {
       state.isForegroundServiceActive = false
     }
   }),
   disableForegroundService: jest.fn(() => {
     // Mirror the native guard: refuse if a session is already in flight.
-    const hasActiveTimers = Array.from(state.timers.values()).some(
+    const hasActiveTimers = Array.from(state.acceptedTimers.values()).some(
       (t) => !t.cleared
     )
     if (
@@ -86,7 +131,7 @@ const mockNativeTimer = {
     // alive). Intentionally does NOT check state.isForegroundServiceActive
     // on its own — the physical flag is a lagging indicator that would
     // spuriously block configure right after stopBackgroundMode.
-    const hasActiveTimers = Array.from(state.timers.values()).some(
+    const hasActiveTimers = Array.from(state.acceptedTimers.values()).some(
       (t) => !t.cleared
     )
     if (state.isExplicitBackgroundModeRequested || hasActiveTimers) {
@@ -104,17 +149,27 @@ export const NitroModules = {
 
 export const __mockHelpers = {
   fireTimer(id: number) {
-    const t = state.timers.get(id)
-    if (!t) throw new Error(`No timer with id ${id}`)
+    const t = materializeTimer(id)
+    if (!t) {
+      if (state.inactiveTimerIds.has(id)) return
+      throw new Error(`No timer with id ${id}`)
+    }
     if (t.cleared) return
-    t.callback(id)
-    // Mirror native setTimeout semantics: after the Runnable fires, the
-    // native side removes the entry from `timeoutRunnables`. Intervals
-    // stay in the map because they reschedule themselves. Without this,
-    // `hasActiveTimers` in the `configure` mock would stay true forever
-    // after a setTimeout fires, diverging from native.
-    if (t.type === 'timeout') {
-      state.timers.delete(id)
+    try {
+      t.callback(id)
+    } finally {
+      // Mirror native setTimeout semantics: after the Runnable fires, the
+      // native side removes the entry from `timeoutRunnables`. Intervals
+      // stay in the map because they reschedule themselves. Without this,
+      // `hasActiveTimers` in the `configure` mock would stay true forever
+      // after a setTimeout fires, diverging from native.
+      if (t.type === 'timeout') {
+        state.timers.delete(id)
+        state.pendingTimers.delete(id)
+        state.acceptedTimers.delete(id)
+        state.inactiveTimerIds.add(id)
+        updateImplicitForegroundService()
+      }
     }
   },
   getTimer(id: number) {
@@ -122,6 +177,9 @@ export const __mockHelpers = {
   },
   reset() {
     state.timers.clear()
+    state.pendingTimers.clear()
+    state.acceptedTimers.clear()
+    state.inactiveTimerIds.clear()
     state.isForegroundServiceActive = false
     state.isExplicitBackgroundModeRequested = false
     state.lastConfigJson = null
@@ -146,6 +204,15 @@ export const __mockHelpers = {
   },
   lastConfigJson(): string | null {
     return state.lastConfigJson
+  },
+  isTimerAccepted(id: number): boolean {
+    return state.acceptedTimers.has(id)
+  },
+  isTimerPending(id: number): boolean {
+    return state.pendingTimers.has(id)
+  },
+  isTimerActive(id: number): boolean {
+    return state.timers.has(id)
   },
   startBackgroundModeCalls(): number {
     return mockNativeTimer.startBackgroundMode.mock.calls.length
