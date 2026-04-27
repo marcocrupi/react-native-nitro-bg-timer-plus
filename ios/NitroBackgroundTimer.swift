@@ -12,6 +12,7 @@ import NitroModules
 class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
   private var bgTask: UIBackgroundTaskIdentifier = .invalid
+  private var didEnterBackgroundObserver: NSObjectProtocol?
   private var timeoutTimers: [Int: Timer] = [:]
   private var intervalTimers: [Int: Timer] = [:]
 
@@ -19,6 +20,11 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
   private var isDisposed: Bool = false
 
   private static let logTag = "[NitroBgTimer]"
+
+  override init() {
+    super.init()
+    installLifecycleObservers()
+  }
 
   // MARK: - Telemetry
   private func logInfo(_ message: String) {
@@ -35,28 +41,56 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
     #endif
   }
 
+  // MARK: - Lifecycle helpers
+  private var hasActiveTimers: Bool {
+    !timeoutTimers.isEmpty || !intervalTimers.isEmpty
+  }
+
+  private func installLifecycleObservers() {
+    guard didEnterBackgroundObserver == nil else { return }
+
+    didEnterBackgroundObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.didEnterBackgroundNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.handleDidEnterBackground()
+    }
+  }
+
+  private func removeLifecycleObservers() {
+    if let observer = didEnterBackgroundObserver {
+      NotificationCenter.default.removeObserver(observer)
+      didEnterBackgroundObserver = nil
+    }
+  }
+
+  private func handleDidEnterBackground() {
+    guard !isDisposed else { return }
+    guard hasActiveTimers && bgTask == .invalid else { return }
+
+    logDebug("App entered background with active timers and no background task; reacquiring")
+    acquireBackgroundTask()
+  }
+
+  private func performOnMainSynchronously(_ work: () -> Void) {
+    if Thread.isMainThread {
+      work()
+    } else {
+      DispatchQueue.main.sync(execute: work)
+    }
+  }
+
   // MARK: - Background task helpers (always called on main queue)
   private func acquireBackgroundTask() {
+    guard !isDisposed else { return }
     guard bgTask == .invalid else { return }
 
-    bgTask = UIApplication.shared.beginBackgroundTask(withName: "NitroBgTimer") { [weak self] in
-      // iOS may invoke the expiration handler from an arbitrary thread shortly before
-      // killing the process with 0x8badf00d. Bounce to main to safely mutate state.
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        self.logWarn("Background task expiration handler fired — releasing background task identifier (timers preserved)")
-        // Critical: do NOT call cleanupAll() here. iOS only requires us to end
-        // the background task to avoid 0x8badf00d. Invalidating Timer instances
-        // here would silently disable all consumer timers ~28-30s after entering
-        // background — the very bug this change fixes. Timers must keep firing
-        // as long as the main run loop is alive; iOS decides when to actually
-        // suspend the app, not us.
-        if self.bgTask != .invalid {
-          UIApplication.shared.endBackgroundTask(self.bgTask)
-          self.bgTask = .invalid
-        }
-      }
+    var taskIdentifier: UIBackgroundTaskIdentifier = .invalid
+    taskIdentifier = UIApplication.shared.beginBackgroundTask(withName: "NitroBgTimer") { [weak self] in
+      self?.handleBackgroundTaskExpiration(taskIdentifier)
     }
+    bgTask = taskIdentifier
 
     if bgTask == .invalid {
       logWarn("Failed to acquire background task")
@@ -65,21 +99,42 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
     }
   }
 
+  private func handleBackgroundTaskExpiration(_ taskIdentifier: UIBackgroundTaskIdentifier) {
+    performOnMainSynchronously {
+      logWarn("Background task expiration handler fired — releasing background task identifier (timers preserved)")
+      // Critical: do NOT call cleanupAll() here. iOS only requires us to end
+      // the expired background task to avoid 0x8badf00d. Timer instances are
+      // preserved so active timers can continue best-effort and reacquire a
+      // new background task on the next background transition.
+      endBackgroundTaskIfCurrent(taskIdentifier, reason: "expired")
+    }
+  }
+
   private func releaseBackgroundTaskIfNeeded() {
-    if timeoutTimers.isEmpty && intervalTimers.isEmpty {
+    if !hasActiveTimers {
       releaseBackgroundTask()
     }
   }
 
   private func releaseBackgroundTask() {
-    guard bgTask != .invalid else { return }
-    UIApplication.shared.endBackgroundTask(bgTask)
+    endBackgroundTaskIfCurrent(bgTask, reason: "released")
+  }
+
+  private func endBackgroundTaskIfCurrent(_ taskIdentifier: UIBackgroundTaskIdentifier, reason: String) {
+    guard taskIdentifier != .invalid else { return }
+    guard bgTask == taskIdentifier else {
+      logDebug("Ignoring stale background task \(reason) request")
+      return
+    }
+
+    UIApplication.shared.endBackgroundTask(taskIdentifier)
     bgTask = .invalid
-    logDebug("Background task released")
+    logDebug("Background task \(reason)")
   }
 
   // MARK: - Centralized cleanup (must run on main queue)
   private func cleanupAll() {
+    removeLifecycleObservers()
     timeoutTimers.values.forEach { $0.invalidate() }
     intervalTimers.values.forEach { $0.invalidate() }
     timeoutTimers.removeAll()
@@ -245,6 +300,7 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
     let timeouts = timeoutTimers
     let intervals = intervalTimers
     let task = bgTask
+    let observer = didEnterBackgroundObserver
     let alreadyDisposed = isDisposed
 
     #if DEBUG
@@ -253,10 +309,16 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
     if alreadyDisposed {
       // cleanupAll() has already run via dispose() — nothing to do.
+      if let observer = observer {
+        NotificationCenter.default.removeObserver(observer)
+      }
       return
     }
 
     let doCleanup = {
+      if let observer = observer {
+        NotificationCenter.default.removeObserver(observer)
+      }
       timeouts.values.forEach { $0.invalidate() }
       intervals.values.forEach { $0.invalidate() }
       if task != .invalid {
