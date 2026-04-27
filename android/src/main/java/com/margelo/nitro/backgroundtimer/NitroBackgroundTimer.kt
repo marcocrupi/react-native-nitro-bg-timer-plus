@@ -13,8 +13,10 @@ import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.ReactApplicationContext
 import com.margelo.nitro.NitroModules
 import org.json.JSONObject
+import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 @DoNotStrip
 class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventListener {
@@ -67,12 +69,14 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   // finish before flipping the state and posting cleanup.
   private val lifecycleLock = Any()
 
-  // Foreground service state. AtomicBoolean (not volatile) because these
-  // are mutated from both the JS thread (startBackgroundMode / stopBackgroundMode
-  // / configure / setTimeout / setInterval entry points) and the worker thread
-  // (cleanupAll). compareAndSet semantics give us the same race-free start/stop
-  // idempotency we rely on for `isDisposed`.
-  private val isForegroundServiceActive = AtomicBoolean(false)
+  private val foregroundServiceOwnerId = nextForegroundServiceOwnerId.getAndIncrement()
+
+  // Foreground service state. Protected by a small lock because state and
+  // request id must move together: callbacks from the Android Service must not
+  // be able to confirm or clear a newer request using an older Intent.
+  private val foregroundServiceLock = Any()
+  private var foregroundServiceState = ForegroundServiceState.STOPPED
+  private var foregroundServiceRequestId = 0L
   private val isExplicitBackgroundModeRequested = AtomicBoolean(false)
 
   // Consumer opt-out flag. Set once via `disableForegroundService()` at app
@@ -106,7 +110,14 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     val iconResourceName: String?
   )
 
+  private enum class ForegroundServiceState {
+    STOPPED,
+    STARTING,
+    ACTIVE
+  }
+
   init {
+    registerForegroundServiceOwner(foregroundServiceOwnerId, this)
     if (BuildConfig.DEBUG) {
       Log.d(TAG, "HandlerThread started (${timerThread.name})")
     }
@@ -216,7 +227,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     }
     // Tear down the foreground service — both the explicit flag and any
     // implicit activation. Safe to call unconditionally; stopForegroundServiceInternal
-    // early-returns if the service is not active.
+    // early-returns if the service is neither starting nor active.
     isExplicitBackgroundModeRequested.set(false)
     stopForegroundServiceInternal()
   }
@@ -227,18 +238,32 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
    * scheduling priority so timer Runnables are not throttled by the
    * `bg_non_interactive` cgroup.
    *
-   * Idempotent: returns immediately if the service is already active. Safe
-   * to call from any thread.
+   * Idempotent: returns immediately if the service is already starting or
+   * active. Safe to call from any thread.
    *
    * On failure (e.g. Android 12+ background-start restriction), logs a
-   * warning and leaves `isForegroundServiceActive = false`, so timers
+   * warning and leaves the foreground service state STOPPED, so timers
    * continue running with wake-lock-only precision (~10% drift).
    */
   private fun startForegroundServiceInternal() {
     if (isDisposed.get()) return
-    if (!isForegroundServiceActive.compareAndSet(false, true)) return
+    if (isForegroundServiceDisabled.get()) return
+    val requestId = synchronized(foregroundServiceLock) {
+      if (isDisposed.get() ||
+        isForegroundServiceDisabled.get() ||
+        foregroundServiceState != ForegroundServiceState.STOPPED
+      ) {
+        null
+      } else {
+        foregroundServiceRequestId += 1
+        foregroundServiceState = ForegroundServiceState.STARTING
+        foregroundServiceRequestId
+      }
+    } ?: return
     val intent = Intent(reactContext, NitroBackgroundTimerService::class.java).apply {
       action = NitroBackgroundTimerService.ACTION_START
+      putExtra(NitroBackgroundTimerService.EXTRA_OWNER_ID, foregroundServiceOwnerId)
+      putExtra(NitroBackgroundTimerService.EXTRA_REQUEST_ID, requestId)
       notificationConfig?.let { cfg ->
         putExtra(NitroBackgroundTimerService.EXTRA_CONFIG_TITLE, cfg.title)
         putExtra(NitroBackgroundTimerService.EXTRA_CONFIG_TEXT, cfg.text)
@@ -253,25 +278,100 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       } else {
         reactContext.startService(intent)
       }
-      Log.i(TAG, "Foreground service started")
+      Log.i(TAG, "Foreground service start requested")
     } catch (e: Exception) {
       // On API 31+ this can throw ForegroundServiceStartNotAllowedException
       // if the app tries to start it from a background state without a
       // qualifying trigger. We roll back the flag and fall through — timers
       // will run with wake-lock-only precision.
       Log.w(TAG, "Failed to start foreground service, falling back to wake lock only", e)
-      isForegroundServiceActive.set(false)
+      synchronized(foregroundServiceLock) {
+        if (foregroundServiceRequestId == requestId &&
+          foregroundServiceState == ForegroundServiceState.STARTING
+        ) {
+          foregroundServiceState = ForegroundServiceState.STOPPED
+        }
+      }
     }
   }
 
   private fun stopForegroundServiceInternal() {
-    if (!isForegroundServiceActive.compareAndSet(true, false)) return
+    val shouldStop = synchronized(foregroundServiceLock) {
+      if (foregroundServiceState == ForegroundServiceState.STOPPED) {
+        false
+      } else {
+        foregroundServiceRequestId += 1
+        foregroundServiceState = ForegroundServiceState.STOPPED
+        true
+      }
+    }
+    if (!shouldStop) return
     val intent = Intent(reactContext, NitroBackgroundTimerService::class.java)
     try {
       reactContext.stopService(intent)
-      Log.i(TAG, "Foreground service stopped")
+      Log.i(TAG, "Foreground service stop requested")
     } catch (e: Exception) {
       Log.w(TAG, "Failed to stop foreground service", e)
+    }
+  }
+
+  private fun isForegroundServiceStartingOrActive(): Boolean =
+    synchronized(foregroundServiceLock) {
+      foregroundServiceState != ForegroundServiceState.STOPPED
+    }
+
+  private fun handleForegroundServiceStarted(requestId: Long): Boolean {
+    var didTransition = false
+    val accepted = synchronized(foregroundServiceLock) {
+      if (isDisposed.get() || foregroundServiceRequestId != requestId) {
+        false
+      } else {
+        when (foregroundServiceState) {
+          ForegroundServiceState.STARTING -> {
+            foregroundServiceState = ForegroundServiceState.ACTIVE
+            didTransition = true
+            true
+          }
+          ForegroundServiceState.ACTIVE -> true
+          ForegroundServiceState.STOPPED -> false
+        }
+      }
+    }
+    if (didTransition) {
+      Log.i(TAG, "Foreground service active")
+    }
+    return accepted
+  }
+
+  private fun handleForegroundServiceStartFailed(requestId: Long) {
+    val cleared = synchronized(foregroundServiceLock) {
+      if (foregroundServiceRequestId == requestId &&
+        foregroundServiceState != ForegroundServiceState.STOPPED
+      ) {
+        foregroundServiceState = ForegroundServiceState.STOPPED
+        true
+      } else {
+        false
+      }
+    }
+    if (cleared) {
+      Log.w(TAG, "Foreground service failed to enter foreground, falling back to wake lock only")
+    }
+  }
+
+  private fun handleForegroundServiceDestroyed(requestId: Long) {
+    val cleared = synchronized(foregroundServiceLock) {
+      if (foregroundServiceRequestId == requestId &&
+        foregroundServiceState != ForegroundServiceState.STOPPED
+      ) {
+        foregroundServiceState = ForegroundServiceState.STOPPED
+        true
+      } else {
+        false
+      }
+    }
+    if (cleared) {
+      Log.i(TAG, "Foreground service destroyed")
     }
   }
 
@@ -290,17 +390,16 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
    *      stopped the service between the JS-thread check and the worker's
    *      processing of the post.
    *
-   * Idempotent via `isForegroundServiceActive` CAS inside
-   * `startForegroundServiceInternal`: if the service is already up, this is
-   * a no-op; if a concurrent start is in flight, the CAS loser returns
-   * without side-effects.
+   * Idempotent via the foreground service state lock inside
+   * `startForegroundServiceInternal`: if the service is already up or a start
+   * request is in flight, this is a no-op.
    *
    * Note on explicit vs implicit mode: this method intentionally does NOT
    * short-circuit on `isExplicitBackgroundModeRequested`. A previous design
    * did, but that path silently swallowed the failure-retry case where
    * `startBackgroundMode()` tried and failed (e.g. Android 12+ background
-   * start restriction) — subsequent timers would then never retry the
-   * start. Checking only `isForegroundServiceActive` is both simpler and
+   * start restriction) — subsequent timers would then never retry the start.
+   * Checking only the physical foreground service state is both simpler and
    * self-healing.
    */
   private fun ensureForegroundServiceForTimer() {
@@ -310,7 +409,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     // — just with ~10% drift in background instead of foreground-priority
     // accuracy. See `disableForegroundService()` Kdoc.
     if (isForegroundServiceDisabled.get()) return
-    if (isForegroundServiceActive.get()) return
+    if (isForegroundServiceStartingOrActive()) return
     startForegroundServiceInternal()
   }
 
@@ -427,7 +526,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     // or the FGS flag is set, we refuse — otherwise we'd leave the library
     // in an inconsistent state where the FGS is running but new timers
     // bypass it.
-    if (isForegroundServiceActive.get() ||
+    if (isForegroundServiceStartingOrActive() ||
       isExplicitBackgroundModeRequested.get() ||
       hasTimerState()
     ) {
@@ -447,11 +546,10 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       Log.w(TAG, "configure called on disposed instance, ignoring")
       return
     }
-    // Gate on the semantic "is anyone still using the service" question,
-    // not on the physical `isForegroundServiceActive` flag. The physical
-    // flag is updated asynchronously by the worker thread inside
-    // maybeStopForegroundServiceAfterClear(), so right after the user
-    // calls stopBackgroundMode() it still reads `true` for a brief window,
+    // Gate on the semantic "is anyone still using the service" question.
+    // The physical foreground service state is updated asynchronously by the
+    // worker thread and by Service callbacks, so right after the user calls
+    // stopBackgroundMode() it can still be STARTING/ACTIVE for a brief window,
     // even though the user has clearly signaled "I want this stopped".
     //
     // Semantic check: block configure if an explicit background mode is
@@ -687,6 +785,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     } catch (e: Exception) {
       Log.w(TAG, "Failed to remove LifecycleEventListener", e)
     }
+    unregisterForegroundServiceOwner(foregroundServiceOwnerId)
 
     // Post cleanup on the worker thread so any pending messages are drained in order,
     // then quit the looper from within. We cannot simply call quitSafely() from an
@@ -736,6 +835,11 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         // finalize must never throw
       }
       try {
+        unregisterForegroundServiceOwner(foregroundServiceOwnerId)
+      } catch (_: Throwable) {
+        // finalize must never throw
+      }
+      try {
         cleanupAll()
       } catch (_: Throwable) {
         // finalize must never throw
@@ -747,5 +851,48 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   companion object {
     private const val TAG = "NitroBgTimer"
     private const val WAKE_LOCK_TAG = "NitroBgTimer::WakeLock"
+
+    private val nextForegroundServiceOwnerId = AtomicLong(1)
+    private val foregroundServiceOwners = ConcurrentHashMap<Long, WeakReference<NitroBackgroundTimer>>()
+
+    private fun registerForegroundServiceOwner(ownerId: Long, owner: NitroBackgroundTimer) {
+      foregroundServiceOwners[ownerId] = WeakReference(owner)
+    }
+
+    private fun unregisterForegroundServiceOwner(ownerId: Long) {
+      foregroundServiceOwners.remove(ownerId)
+    }
+
+    private fun notifyForegroundServiceOwner(
+      ownerId: Long,
+      block: (NitroBackgroundTimer) -> Boolean
+    ): Boolean {
+      val ref = foregroundServiceOwners[ownerId] ?: return false
+      val owner = ref.get()
+      if (owner == null) {
+        foregroundServiceOwners.remove(ownerId, ref)
+        return false
+      }
+      return block(owner)
+    }
+
+    internal fun notifyForegroundServiceStarted(ownerId: Long, requestId: Long): Boolean =
+      notifyForegroundServiceOwner(ownerId) { owner ->
+        owner.handleForegroundServiceStarted(requestId)
+      }
+
+    internal fun notifyForegroundServiceStartFailed(ownerId: Long, requestId: Long) {
+      notifyForegroundServiceOwner(ownerId) { owner ->
+        owner.handleForegroundServiceStartFailed(requestId)
+        true
+      }
+    }
+
+    internal fun notifyForegroundServiceDestroyed(ownerId: Long, requestId: Long) {
+      notifyForegroundServiceOwner(ownerId) { owner ->
+        owner.handleForegroundServiceDestroyed(requestId)
+        true
+      }
+    }
   }
 }

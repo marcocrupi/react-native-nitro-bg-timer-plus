@@ -34,6 +34,8 @@ import androidx.core.app.NotificationCompat
  * review; a ready-to-paste paragraph is in the README.
  */
 class NitroBackgroundTimerService : Service() {
+  private var currentOwnerId = NO_OWNER_ID
+  private var currentRequestId = NO_REQUEST_ID
 
   override fun onCreate() {
     super.onCreate()
@@ -42,6 +44,16 @@ class NitroBackgroundTimerService : Service() {
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     Log.i(TAG, "Service onStartCommand (action=${intent?.action})")
+
+    val ownerId = intent?.getLongExtra(EXTRA_OWNER_ID, NO_OWNER_ID) ?: NO_OWNER_ID
+    val requestId = intent?.getLongExtra(EXTRA_REQUEST_ID, NO_REQUEST_ID) ?: NO_REQUEST_ID
+    if (ownerId == NO_OWNER_ID || requestId == NO_REQUEST_ID) {
+      Log.w(TAG, "Service started without owner/request id, stopping")
+      stopSelf(startId)
+      return START_NOT_STICKY
+    }
+    currentOwnerId = ownerId
+    currentRequestId = requestId
 
     val config = NotificationConfig(
       title = intent?.getStringExtra(EXTRA_CONFIG_TITLE),
@@ -65,12 +77,18 @@ class NitroBackgroundTimerService : Service() {
       } else {
         startForeground(NOTIFICATION_ID, notification)
       }
+      val accepted = NitroBackgroundTimer.notifyForegroundServiceStarted(ownerId, requestId)
+      if (!accepted) {
+        Log.w(TAG, "Foreground service request is stale or owner is gone, stopping")
+        stopSelf(startId)
+      }
     } catch (e: Exception) {
       // On API 31+ the system can refuse the start with
       // ForegroundServiceStartNotAllowedException (e.g. background-start
       // restriction, missing POST_NOTIFICATIONS on API 34+). We log and
       // bail — the wake-lock-only fallback remains in effect for timers.
       Log.w(TAG, "startForeground failed, service will stop", e)
+      NitroBackgroundTimer.notifyForegroundServiceStartFailed(ownerId, requestId)
       stopSelf(startId)
     }
 
@@ -81,6 +99,11 @@ class NitroBackgroundTimerService : Service() {
 
   override fun onDestroy() {
     Log.i(TAG, "Service onDestroy")
+    if (currentOwnerId != NO_OWNER_ID && currentRequestId != NO_REQUEST_ID) {
+      NitroBackgroundTimer.notifyForegroundServiceDestroyed(currentOwnerId, currentRequestId)
+      currentOwnerId = NO_OWNER_ID
+      currentRequestId = NO_REQUEST_ID
+    }
     super.onDestroy()
   }
 
@@ -183,6 +206,8 @@ class NitroBackgroundTimerService : Service() {
 
     const val NOTIFICATION_ID = 1
     const val ACTION_START = "com.margelo.nitro.backgroundtimer.action.START"
+    const val EXTRA_OWNER_ID = "owner_id"
+    const val EXTRA_REQUEST_ID = "request_id"
     const val EXTRA_CONFIG_TITLE = "config_title"
     const val EXTRA_CONFIG_TEXT = "config_text"
     const val EXTRA_CONFIG_CHANNEL_ID = "config_channel_id"
@@ -193,5 +218,7 @@ class NitroBackgroundTimerService : Service() {
     private const val DEFAULT_CHANNEL_NAME = "Background Timer"
     private const val DEFAULT_TITLE = "Background Timer Active"
     private const val DEFAULT_TEXT = "Tap to return to the app"
+    private const val NO_OWNER_ID = -1L
+    private const val NO_REQUEST_ID = -1L
   }
 }
