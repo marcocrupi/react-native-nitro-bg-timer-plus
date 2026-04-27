@@ -38,6 +38,28 @@ describe('BackgroundTimer — callback invocation', () => {
     })
   })
 
+  it('cleans up the timeout callback when the user callback throws', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      const error = new Error('boom')
+      const cb = jest.fn(() => {
+        throw error
+      })
+      const id = BackgroundTimer.setTimeout(cb, 100)
+
+      expect(() => {
+        __mockHelpers.fireTimer(id)
+      }).toThrow(error)
+      expect(cb).toHaveBeenCalledTimes(1)
+
+      __mockHelpers.fireTimer(id)
+      expect(cb).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('does not invoke the callback after clearTimeout', () => {
     jest.isolateModules(() => {
       const { BackgroundTimer } = require('../index')

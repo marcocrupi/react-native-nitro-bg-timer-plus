@@ -67,8 +67,11 @@ export const BackgroundTimer = {
     const id = nextId++
     timeoutCallbacks.set(id, callback)
     NitroBackgroundTimer.setTimeout(id, duration, () => {
-      timeoutCallbacks.get(id)?.()
-      timeoutCallbacks.delete(id)
+      try {
+        timeoutCallbacks.get(id)?.()
+      } finally {
+        timeoutCallbacks.delete(id)
+      }
     })
     return id
   },
