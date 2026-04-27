@@ -58,6 +58,13 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   // and both reach the cleanup path.
   private val isDisposed = AtomicBoolean(false)
 
+  // Serializes timer-scheduling side effects with the transition to disposed.
+  // If dispose wins first, schedule blocks observe `isDisposed` before they
+  // start services, acquire wake locks, or insert runnables. If a schedule
+  // block is already running, dispose waits for that pre-dispose work to
+  // finish before flipping the state and posting cleanup.
+  private val lifecycleLock = Any()
+
   // Foreground service state. AtomicBoolean (not volatile) because these
   // are mutated from both the JS thread (startBackgroundMode / stopBackgroundMode
   // / configure / setTimeout / setInterval entry points) and the worker thread
@@ -224,6 +231,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
    * continue running with wake-lock-only precision (~10% drift).
    */
   private fun startForegroundServiceInternal() {
+    if (isDisposed.get()) return
     if (!isForegroundServiceActive.compareAndSet(false, true)) return
     val intent = Intent(reactContext, NitroBackgroundTimerService::class.java).apply {
       action = NitroBackgroundTimerService.ACTION_START
@@ -292,6 +300,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
    * self-healing.
    */
   private fun ensureForegroundServiceForTimer() {
+    if (isDisposed.get()) return
     // Consumer opt-out short-circuit: skip the FGS entirely. The wake-lock
     // path in setTimeout/setInterval continues to run, so timers still fire
     // — just with ~10% drift in background instead of foreground-priority
@@ -315,6 +324,51 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     if (isExplicitBackgroundModeRequested.get()) return
     if (timeoutRunnables.isNotEmpty() || intervalRunnables.isNotEmpty()) return
     stopForegroundServiceInternal()
+  }
+
+  private fun postToWorker(operation: String, block: () -> Unit): Boolean {
+    val posted = try {
+      handler.post {
+        block()
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "$operation failed to post to worker", e)
+      false
+    }
+    if (!posted) {
+      Log.w(TAG, "$operation ignored because worker looper is not accepting messages")
+    }
+    return posted
+  }
+
+  private fun postDelayedToWorker(operation: String, runnable: Runnable, delayMillis: Long): Boolean {
+    val posted = try {
+      handler.postDelayed(runnable, delayMillis)
+    } catch (e: Exception) {
+      Log.w(TAG, "$operation failed to post delayed runnable", e)
+      false
+    }
+    if (!posted) {
+      Log.w(TAG, "$operation delayed runnable ignored because worker looper is not accepting messages")
+    }
+    return posted
+  }
+
+  private fun prepareTimerSchedule(operation: String): Boolean =
+    synchronized(lifecycleLock) {
+      if (isDisposed.get()) {
+        Log.w(TAG, "$operation called on disposed instance, ignoring")
+        false
+      } else {
+        ensureForegroundServiceForTimer()
+        true
+      }
+    }
+
+  private fun rollbackRejectedSchedule() {
+    if (!isExplicitBackgroundModeRequested.get() && !hasActiveTimers()) {
+      stopForegroundServiceInternal()
+    }
   }
 
   // --- Public background-mode API ---
@@ -429,41 +483,57 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
 
   // --- Timeout ---
   override fun setTimeout(id: Double, duration: Double, callback: (Double) -> Unit) {
-    if (isDisposed.get()) {
-      Log.w(TAG, "setTimeout called on disposed instance, ignoring")
-      return
-    }
     // Implicit foreground service activation: kicks in when the consumer
     // hasn't called startBackgroundMode() explicitly. Called from the JS
     // thread before posting so the service request beats the timer race
     // against a quick app-background transition.
-    ensureForegroundServiceForTimer()
-    handler.post {
-      // Safety net: between the JS-thread check above and this worker-side
-      // block, a previous Runnable may have completed and stopped the
-      // service via maybeStopForegroundServiceAfterClear(). Re-assert the
-      // service state here — idempotent via CAS, no-op if already active.
-      ensureForegroundServiceForTimer()
+    if (!prepareTimerSchedule("setTimeout")) return
 
-      val intId = id.toInt()
-      // inline-clear previous timer with same id (no re-post to avoid deadlock-free but wasteful double-hop)
-      timeoutRunnables[intId]?.let { handler.removeCallbacks(it) }
-      timeoutRunnables.remove(intId)
-
-      acquireWakeLock()
-      val runnable = Runnable {
-        try {
-          callback(id)
-        } catch (e: Exception) {
-          Log.e(TAG, "Callback error in setTimeout($id): ${e.message}", e)
+    val posted = postToWorker("setTimeout($id)") {
+      synchronized(lifecycleLock) {
+        if (isDisposed.get()) {
+          Log.w(TAG, "setTimeout($id) ignored after dispose")
+          return@synchronized
         }
-        timeoutRunnables.remove(intId)
-        releaseWakeLockIfNeeded()
-        maybeStopForegroundServiceAfterClear()
-      }
+        // Safety net: between the JS-thread check above and this worker-side
+        // block, a previous Runnable may have completed and stopped the
+        // service via maybeStopForegroundServiceAfterClear(). Re-assert the
+        // service state here — idempotent via CAS, no-op if already active.
+        ensureForegroundServiceForTimer()
+        if (isDisposed.get()) {
+          Log.w(TAG, "setTimeout($id) ignored after dispose")
+          return@synchronized
+        }
 
-      timeoutRunnables[intId] = runnable
-      handler.postDelayed(runnable, duration.toLong())
+        val intId = id.toInt()
+        // inline-clear previous timer with same id (no re-post to avoid deadlock-free but wasteful double-hop)
+        timeoutRunnables[intId]?.let { handler.removeCallbacks(it) }
+        timeoutRunnables.remove(intId)
+
+        val runnable = Runnable {
+          if (isDisposed.get()) return@Runnable
+          try {
+            callback(id)
+          } catch (e: Exception) {
+            Log.e(TAG, "Callback error in setTimeout($id): ${e.message}", e)
+          }
+          timeoutRunnables.remove(intId)
+          releaseWakeLockIfNeeded()
+          maybeStopForegroundServiceAfterClear()
+        }
+
+        timeoutRunnables[intId] = runnable
+        if (!postDelayedToWorker("setTimeout($id)", runnable, duration.toLong())) {
+          timeoutRunnables.remove(intId, runnable)
+          releaseWakeLockIfNeeded()
+          maybeStopForegroundServiceAfterClear()
+          return@synchronized
+        }
+        acquireWakeLock()
+      }
+    }
+    if (!posted) {
+      rollbackRejectedSchedule()
     }
   }
 
@@ -480,37 +550,58 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
 
   // --- Interval ---
   override fun setInterval(id: Double, interval: Double, callback: (Double) -> Unit) {
-    if (isDisposed.get()) {
-      Log.w(TAG, "setInterval called on disposed instance, ignoring")
-      return
-    }
-    ensureForegroundServiceForTimer()
-    handler.post {
-      // Safety net: see equivalent comment in setTimeout above.
-      ensureForegroundServiceForTimer()
+    if (!prepareTimerSchedule("setInterval")) return
 
-      val intId = id.toInt()
-      intervalRunnables[intId]?.let { handler.removeCallbacks(it) }
-      intervalRunnables.remove(intId)
+    val posted = postToWorker("setInterval($id)") {
+      synchronized(lifecycleLock) {
+        if (isDisposed.get()) {
+          Log.w(TAG, "setInterval($id) ignored after dispose")
+          return@synchronized
+        }
+        // Safety net: see equivalent comment in setTimeout above.
+        ensureForegroundServiceForTimer()
+        if (isDisposed.get()) {
+          Log.w(TAG, "setInterval($id) ignored after dispose")
+          return@synchronized
+        }
 
-      acquireWakeLock()
-      val runnable = object : Runnable {
-        override fun run() {
-          try {
-            callback(id)
-          } catch (e: Exception) {
-            Log.e(TAG, "Callback error in setInterval($id): ${e.message}", e)
-          }
-          // Only reschedule if this interval is still registered and not disposed.
-          // Wake lock stays held across ticks — no "renewal" needed (see acquireWakeLock() Kdoc).
-          if (intervalRunnables.containsKey(intId) && !isDisposed.get()) {
-            handler.postDelayed(this, interval.toLong())
+        val intId = id.toInt()
+        intervalRunnables[intId]?.let { handler.removeCallbacks(it) }
+        intervalRunnables.remove(intId)
+
+        val runnable = object : Runnable {
+          override fun run() {
+            if (isDisposed.get()) return
+            try {
+              callback(id)
+            } catch (e: Exception) {
+              Log.e(TAG, "Callback error in setInterval($id): ${e.message}", e)
+            }
+            // Only reschedule if this interval is still registered and not disposed.
+            // Wake lock stays held across ticks — no "renewal" needed (see acquireWakeLock() Kdoc).
+            if (intervalRunnables.containsKey(intId) && !isDisposed.get()) {
+              val rescheduled = postDelayedToWorker("setInterval($id)", this, interval.toLong())
+              if (!rescheduled) {
+                intervalRunnables.remove(intId, this)
+                releaseWakeLockIfNeeded()
+                maybeStopForegroundServiceAfterClear()
+              }
+            }
           }
         }
-      }
 
-      intervalRunnables[intId] = runnable
-      handler.postDelayed(runnable, interval.toLong())
+        intervalRunnables[intId] = runnable
+        if (!postDelayedToWorker("setInterval($id)", runnable, interval.toLong())) {
+          intervalRunnables.remove(intId, runnable)
+          releaseWakeLockIfNeeded()
+          maybeStopForegroundServiceAfterClear()
+          return@synchronized
+        }
+        acquireWakeLock()
+      }
+    }
+    if (!posted) {
+      rollbackRejectedSchedule()
     }
   }
 
@@ -548,7 +639,10 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     // cleanup path and its `handler.post` could fall into the direct-cleanup
     // fallback on the caller thread, violating the worker-thread-only
     // invariant documented on `acquireWakeLock()`.
-    if (!isDisposed.compareAndSet(false, true)) {
+    val shouldDispose = synchronized(lifecycleLock) {
+      isDisposed.compareAndSet(false, true)
+    }
+    if (!shouldDispose) {
       Log.w(TAG, "dispose() called on already-disposed instance, ignoring")
       super.dispose()
       return
