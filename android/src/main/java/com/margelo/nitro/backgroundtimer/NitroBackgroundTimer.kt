@@ -460,6 +460,14 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     return posted
   }
 
+  private fun handleTimerCallbackThrowable(timerType: String, timerId: Double, throwable: Throwable) {
+    if (throwable is VirtualMachineError || throwable is ThreadDeath || throwable is LinkageError) {
+      throw throwable
+    }
+
+    Log.e(TAG, "Timer callback failed for $timerType timer id=$timerId", throwable)
+  }
+
   private fun prepareTimerSchedule(operation: String, acceptTimer: () -> Unit): Boolean =
     synchronized(lifecycleLock) {
       if (isDisposed.get()) {
@@ -624,13 +632,14 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
           if (isDisposed.get()) return@Runnable
           try {
             callback(id)
-          } catch (e: Exception) {
-            Log.e(TAG, "Callback error in setTimeout($id): ${e.message}", e)
+          } catch (throwable: Throwable) {
+            handleTimerCallbackThrowable("setTimeout", id, throwable)
+          } finally {
+            timeoutRunnables.remove(intId)
+            acceptedTimeoutIds.remove(intId)
+            releaseWakeLockIfNeeded()
+            maybeStopForegroundServiceAfterClear()
           }
-          timeoutRunnables.remove(intId)
-          acceptedTimeoutIds.remove(intId)
-          releaseWakeLockIfNeeded()
-          maybeStopForegroundServiceAfterClear()
         }
 
         timeoutRunnables[intId] = runnable
@@ -695,8 +704,8 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
             if (isDisposed.get()) return
             try {
               callback(id)
-            } catch (e: Exception) {
-              Log.e(TAG, "Callback error in setInterval($id): ${e.message}", e)
+            } catch (throwable: Throwable) {
+              handleTimerCallbackThrowable("setInterval", id, throwable)
             }
             // Only reschedule if this interval is still registered and not disposed.
             // Wake lock stays held across ticks — no "renewal" needed (see acquireWakeLock() Kdoc).
