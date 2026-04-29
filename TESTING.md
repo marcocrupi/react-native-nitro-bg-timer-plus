@@ -12,6 +12,251 @@ cleanup all require manual verification on each platform.
 3. Open the example app on a physical device (Android: USB debugging on;
    iOS: trusted developer profile)
 
+## Automated smoke test
+
+The example app exposes a smoke mode via:
+
+```txt
+nitrobgtimerexample://smoke?runId=<id>
+```
+
+It logs machine-readable markers to the JS console:
+
+```txt
+[NitroBgSmoke] DEEPLINK_RECEIVED runId=<id> url=<url>
+[NitroBgSmoke] DEEPLINK_IGNORED runId=<id|none> reason=<reason>
+[NitroBgSmoke] NATIVE_PENDING_URL_CHECK runId=none
+[NitroBgSmoke] NATIVE_PENDING_URL_FOUND runId=<id> url=<url>
+[NitroBgSmoke] NATIVE_PENDING_URL_EMPTY runId=none
+[NitroBgSmoke] RUN_REQUESTED runId=<id>
+[NitroBgSmoke] START runId=<id>
+[NitroBgSmoke] STEP PASS runId=<id> name=<step>
+[NitroBgSmoke] STEP FAIL runId=<id> name=<step> reason=<reason>
+[NitroBgSmoke] BACKGROUND_READY runId=<id>
+[NitroBgSmoke] RESULT PASS runId=<id>
+[NitroBgSmoke] RESULT FAIL runId=<id> reason=<reason>
+```
+
+Smoke deep links with a malformed `runId` are ignored with
+`DEEPLINK_IGNORED reason=invalid_run_id`.
+
+Run Android smoke after installing the example app and starting Metro:
+
+```sh
+yarn smoke:android
+```
+
+Use the optional background window automation on Android:
+
+```sh
+yarn smoke:android --background
+```
+
+Run iOS simulator smoke after booting a simulator and starting Metro:
+
+```sh
+yarn smoke:ios
+```
+
+The iOS automated runner builds the Debug example app with `xcodebuild`,
+installs the resulting `.app`, opens the smoke deep link, captures logs, and
+waits for the matching `RESULT PASS/FAIL` marker. Build and install are on by
+default so the smoke does not accidentally test an old app already installed
+on the simulator or device.
+
+On iOS, the example app duplicates JS `[NitroBgSmoke]` markers to native logs
+through an example-only `NitroBgSmokeLog` module. This module is diagnostics
+for the example app only and is not a public library API. Native
+`[NitroBgSmokeNative] OPEN_URL` and `[NitroBgSmokeNative] LAUNCH_URL` markers
+mean iOS received the smoke deep link before React Native Linking handles it.
+The same example-only module also stores the last smoke URL received by
+`AppDelegate` in memory so JS can consume it as a fallback when `Linking` does
+not deliver the URL. `NATIVE_PENDING_URL_FOUND` means this fallback delivered
+the URL to the JS smoke harness. `source=native_pending_url` identifies a JS
+smoke run started from this example-only native pending URL fallback. It is
+valid to see `NATIVE_PENDING_URL_FOUND` followed by
+`DEEPLINK_IGNORED reason=duplicate` when the normal React Native Linking event
+has already started the same run.
+
+On physical devices, the default launch strategy is
+`--launch-strategy launch-then-open-url`: the script launches the app with
+`devicectl --console`, waits briefly for JS boot, then sends the smoke deep
+link with a separate `devicectl --payload-url` command while continuing to read
+the same console stream. Use `--launch-strategy payload-at-launch` to retry the
+legacy single launch command that combines `--console` and `--payload-url`.
+
+Run iOS physical device smoke with a connected, unlocked, trusted device:
+
+```sh
+bash scripts/smoke-ios.sh --device <udid>
+bash scripts/smoke-ios.sh --device <udid> --run-id ios-device-1
+```
+
+On physical devices, `devicectl` and `xcodebuild` may expose different
+identifiers. Use `--device` for `devicectl` and `--xcodebuild-device-id` for
+the `xcodebuild` destination if automatic resolution fails.
+
+Use these flags when reusing a previous build or a known DerivedData path:
+
+```sh
+bash scripts/smoke-ios.sh --skip-build --derived-data /tmp/nitro-bg-timer-xcodebuild
+bash scripts/smoke-ios.sh --skip-build --skip-install
+bash scripts/smoke-ios.sh --derived-data /tmp/nitro-bg-timer-xcodebuild
+```
+
+Automated iOS mode must launch a fresh example app process so
+`devicectl --console` or `simctl log stream` can observe the run. If the app
+is already running, the script fails by default. To let the script terminate
+only the example app and continue, pass:
+
+```sh
+bash scripts/smoke-ios.sh --device <udid> --terminate-existing
+bash scripts/smoke-ios.sh --simulator --terminate-existing
+```
+
+Use manual open-url mode only when the app is already launched from Xcode or
+another harness and you want to observe Metro or Xcode yourself:
+
+```sh
+bash scripts/smoke-ios.sh --device <udid> --open-url-only
+bash scripts/smoke-ios.sh --device <udid> --run-id manual-ios-1 --open-url-only
+```
+
+`--open-url-only` only sends `nitrobgtimerexample://smoke?runId=<id>`; it does
+not build, install, terminate the app, capture logs, or wait for
+`RESULT PASS/FAIL`. The `[NitroBgSmoke]` markers are JS `console.log` markers,
+so in manual mode they may appear in Metro or Xcode rather than the script.
+
+The smoke covers public `BackgroundTimer` API behavior for `setTimeout`,
+`clearTimeout`, `setInterval`, `clearInterval`, observable event delivery,
+batch ordering, reentrant scheduling, a short background-ready interval, and
+final `dispose()`. The scripts exit with:
+
+```txt
+0   RESULT PASS
+1   RESULT FAIL, crash, RedBox, or runtime error marker
+2   preflight, configuration, build, install, or launch setup failure
+124 timeout waiting for a matching RESULT marker
+```
+
+The smoke is one-shot per app process because it calls
+`BackgroundTimer.dispose()` at the end. Reload or restart the app before
+running the smoke again in the same process, including after a manual
+`--open-url-only` run.
+
+Use the last marker reported by the iOS script to classify failures:
+
+- No marker: URL delivery or JS console log capture issue. Verify Metro is
+  running with `yarn example:start`, the target simulator is booted or the
+  device is connected/unlocked/trusted, the example app was not already
+  running, and the full log path printed by the script.
+- `native_url_received`: the URL reached iOS, but the JS smoke handler has not
+  logged `DEEPLINK_RECEIVED` yet. This points to React Native Linking, JS
+  console capture, or app JS initialization.
+- `native_pending_url_found`: JS consumed the pending URL stored by
+  `AppDelegate`, but did not log `DEEPLINK_RECEIVED`.
+- `DEEPLINK_RECEIVED` but no `START`: the deep link reached JS, but the app
+  smoke handler did not start the smoke.
+- `START` but no `RESULT`: the smoke started, but the timer/event bridge did
+  not complete or the app stopped before result logging.
+- `RESULT FAIL`: smoke assertion failure; inspect the failing step and reason.
+
+If the app was launched from Xcode, use `--open-url-only` instead of automated
+mode. If `--skip-install` was used, rerun without it to avoid testing a stale
+installed app.
+
+Physical iOS backgrounding still requires manual validation or a future
+XCUITest that presses Home.
+
+## UI button smoke
+
+The UI button smoke is separate from the automated core smoke above.
+
+- Core smoke opens `nitrobgtimerexample://smoke?runId=<id>` and executes the
+  timer API harness automatically.
+- UI button smoke opens
+  `nitrobgtimerexample://smoke?runId=<id>&mode=ui`, keeps the app
+  interactive, then uses Maestro to press the example app buttons.
+
+`mode=ui` only activates the UI smoke run id. It must not start the core smoke
+until Maestro presses the "Run Smoke" button, which is intentionally last
+because the core smoke calls `BackgroundTimer.dispose()`.
+
+Outside `mode=ui`, the example app behaves like the normal manual demo: button
+taps do not emit `[NitroBgUiSmoke]` markers and do not apply UI-smoke-only
+shortcuts such as reduced timer durations or suppressed alerts.
+
+UI button smoke markers are machine-readable:
+
+```txt
+[NitroBgUiSmoke] START runId=<id> section=<section> action=<action>
+[NitroBgUiSmoke] PASS runId=<id> section=<section> action=<action>
+[NitroBgUiSmoke] FAIL runId=<id> section=<section> action=<action> reason=<reason>
+```
+
+Maestro is required and is not installed automatically:
+
+```sh
+maestro --version
+yarn ui-smoke:android
+yarn ui-smoke:ios
+```
+
+Install Maestro from <https://maestro.mobile.dev/> if the scripts exit with:
+
+```txt
+Maestro is required for UI smoke. Install it from https://maestro.mobile.dev/ ...
+```
+
+The main UI smoke flow is foreground-only. It presses stable `testID`
+selectors, not coordinates, and validates PASS/FAIL per section/action from
+captured logs. It covers:
+
+- setTimeout schedule/fire and cancel
+- setInterval start, stop, reset
+- Background Test reversible foreground actions
+- Concurrent Timers start all and stop all
+- Cleanup mount, tick observation, and unmount cleanup window
+- `useBackgroundTimer` hook start, restart, and stop
+- Stress Test 100 timers
+- Automated Smoke Test "Run Smoke" last
+
+Android:
+
+```sh
+yarn ui-smoke:android
+bash scripts/ui-smoke-android.sh --device <serial>
+bash scripts/ui-smoke-android.sh --flow fgs-optout --device <serial>
+```
+
+iOS simulator:
+
+```sh
+yarn ui-smoke:ios
+bash scripts/ui-smoke-ios.sh --simulator <udid>
+```
+
+iOS physical device:
+
+```sh
+bash scripts/ui-smoke-ios.sh --device <devicectl-id>
+bash scripts/ui-smoke-ios.sh --device <devicectl-id> --xcodebuild-device-id <xcodebuild-id>
+```
+
+`Disable FGS` is intentionally outside the main flow because it is not
+reversible in the same app process. Use the `fgs-optout` flow as a fresh,
+one-shot process check. The Android script refuses to run that flow when the
+example app process is already running unless `--install` is used:
+
+```sh
+bash scripts/ui-smoke-android.sh --flow fgs-optout
+bash scripts/ui-smoke-ios.sh --flow fgs-optout
+```
+
+The UI button smoke does not validate true background/Home behavior, iOS
+background execution, lock-screen behavior, or OEM Android background policy.
+Those remain manual checks or future native UI automation.
+
 ## Android tests
 
 > **Note on Fast Refresh / dev bundle reload**: automatic cleanup on
@@ -51,8 +296,8 @@ host Activity is destroyed, which covers user-initiated quit, system kill
 under memory pressure, and process termination.
 
 - [ ] Start a `setInterval` (e.g. 30s)
-- [ ] Swipe the app away from the recents screen (or force-stop from
-      Android system settings)
+- [ ] Remove the app from the recents screen, or close it from Android
+      system settings
 - [ ] Reopen the app, inspect logcat for
       `NitroBgTimer: onHostDestroy triggered cleanup` (logged during the
       previous destroy cycle)
