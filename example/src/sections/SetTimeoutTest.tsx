@@ -3,6 +3,12 @@ import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 import { Section } from '../components/Section'
 import { useLog } from '../context/LogContext'
+import {
+  failUiSmokeAction,
+  passUiSmokeAction,
+  startUiSmokeAction,
+  type UiSmokeActionToken,
+} from '../smoke/uiSmoke'
 
 type Status = 'idle' | 'pending' | 'fired' | 'cancelled'
 
@@ -12,42 +18,90 @@ export function SetTimeoutTest() {
   const [scheduledAt, setScheduledAt] = useState<string | null>(null)
   const [firedAt, setFiredAt] = useState<string | null>(null)
   const timerRef = useRef<number | null>(null)
+  const scheduleTokenRef = useRef<UiSmokeActionToken | null>(null)
+  const cancelTokenRef = useRef<UiSmokeActionToken | null>(null)
+  const cancelVerificationRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
   const { addLog } = useLog()
 
   const schedule = useCallback(() => {
+    const scheduleToken = startUiSmokeAction('set-timeout', 'schedule', addLog)
+
     if (timerRef.current !== null) {
       BackgroundTimer.clearTimeout(timerRef.current)
       timerRef.current = null
     }
+    if (cancelVerificationRef.current !== null) {
+      clearTimeout(cancelVerificationRef.current)
+      cancelVerificationRef.current = null
+    }
+
     const ms = parseInt(duration, 10) || 5000
+    const smokeMs = scheduleToken.active ? Math.min(ms, 300) : ms
     const now = new Date().toLocaleTimeString()
     setScheduledAt(now)
     setFiredAt(null)
     setStatus('pending')
-    addLog(`[setTimeout] Scheduled for ${ms}ms`)
+    addLog(`[setTimeout] Scheduled for ${smokeMs}ms`)
+    scheduleTokenRef.current = scheduleToken
 
     timerRef.current = BackgroundTimer.setTimeout(() => {
       const fireTime = new Date().toLocaleTimeString()
       setFiredAt(fireTime)
       setStatus('fired')
       timerRef.current = null
-      addLog(`[setTimeout] Fired after ${ms}ms`)
-    }, ms)
+      addLog(`[setTimeout] Fired after ${smokeMs}ms`)
+
+      if (cancelTokenRef.current !== null) {
+        failUiSmokeAction(
+          cancelTokenRef.current,
+          'callback_fired_after_cancel',
+          addLog
+        )
+        cancelTokenRef.current = null
+        return
+      }
+
+      if (scheduleTokenRef.current !== null) {
+        passUiSmokeAction(scheduleTokenRef.current, addLog)
+        scheduleTokenRef.current = null
+      }
+    }, smokeMs)
   }, [duration, addLog])
 
   const cancel = useCallback(() => {
+    const cancelToken = startUiSmokeAction('set-timeout', 'cancel', addLog)
+    cancelTokenRef.current = cancelToken
+    scheduleTokenRef.current = null
+
     if (timerRef.current !== null) {
       BackgroundTimer.clearTimeout(timerRef.current)
       timerRef.current = null
       setStatus('cancelled')
       addLog('[setTimeout] Cancelled')
     }
+
+    if (cancelVerificationRef.current !== null) {
+      clearTimeout(cancelVerificationRef.current)
+    }
+
+    cancelVerificationRef.current = setTimeout(() => {
+      if (cancelTokenRef.current === cancelToken) {
+        passUiSmokeAction(cancelToken, addLog)
+        cancelTokenRef.current = null
+      }
+      cancelVerificationRef.current = null
+    }, 400)
   }, [addLog])
 
   useEffect(() => {
     return () => {
       if (timerRef.current !== null) {
         BackgroundTimer.clearTimeout(timerRef.current)
+      }
+      if (cancelVerificationRef.current !== null) {
+        clearTimeout(cancelVerificationRef.current)
       }
     }
   }, [])
@@ -71,6 +125,8 @@ export function SetTimeoutTest() {
           onChangeText={setDuration}
           keyboardType="numeric"
           placeholder="5000"
+          testID="ui-smoke-set-timeout-duration"
+          accessibilityLabel="ui-smoke-set-timeout-duration"
         />
       </View>
       <View style={styles.row}>
@@ -78,6 +134,9 @@ export function SetTimeoutTest() {
           style={[styles.btn, styles.btnGreen, status === 'pending' && styles.btnDisabled]}
           onPress={schedule}
           disabled={status === 'pending'}
+          testID="ui-smoke-set-timeout-schedule"
+          accessibilityLabel="ui-smoke-set-timeout-schedule"
+          accessibilityRole="button"
         >
           <Text style={styles.btnText}>Schedule</Text>
         </Pressable>
@@ -85,11 +144,18 @@ export function SetTimeoutTest() {
           style={[styles.btn, styles.btnRed, status !== 'pending' && styles.btnDisabled]}
           onPress={cancel}
           disabled={status !== 'pending'}
+          testID="ui-smoke-set-timeout-cancel"
+          accessibilityLabel="ui-smoke-set-timeout-cancel"
+          accessibilityRole="button"
         >
           <Text style={styles.btnText}>Cancel</Text>
         </Pressable>
       </View>
-      <Text style={[styles.status, { color: statusColor }]}>
+      <Text
+        style={[styles.status, { color: statusColor }]}
+        testID={`ui-smoke-set-timeout-status-${status}`}
+        accessibilityLabel={`ui-smoke-set-timeout-status-${status}`}
+      >
         Status: {status}
       </Text>
       {scheduledAt && (

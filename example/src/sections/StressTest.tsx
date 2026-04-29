@@ -3,6 +3,11 @@ import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 import { Section } from '../components/Section'
 import { useLog } from '../context/LogContext'
+import {
+  passUiSmokeAction,
+  startUiSmokeAction,
+  type UiSmokeActionToken,
+} from '../smoke/uiSmoke'
 
 const TIMER_COUNT = 100
 
@@ -12,6 +17,7 @@ export function StressTest() {
   const [running, setRunning] = useState(false)
   const firedRef = useRef(0)
   const idsRef = useRef<number[]>([])
+  const runTokenRef = useRef<UiSmokeActionToken | null>(null)
   const { addLog } = useLog()
 
   useEffect(() => {
@@ -21,6 +27,11 @@ export function StressTest() {
   }, [])
 
   const runTest = useCallback(() => {
+    runTokenRef.current = startUiSmokeAction(
+      'stress',
+      'create-100',
+      addLog
+    )
     // Clear any previous timers
     idsRef.current.forEach((id) => BackgroundTimer.clearTimeout(id))
     idsRef.current = []
@@ -41,6 +52,10 @@ export function StressTest() {
           addLog(
             `[Stress] All ${TIMER_COUNT} timers fired!`
           )
+          if (runTokenRef.current !== null) {
+            passUiSmokeAction(runTokenRef.current, addLog)
+            runTokenRef.current = null
+          }
         }
       }, delay)
       ids.push(id)
@@ -56,11 +71,23 @@ export function StressTest() {
       <View style={styles.statsRow}>
         <View style={styles.stat}>
           <Text style={styles.statLabel}>Created</Text>
-          <Text style={styles.statValue}>{created}</Text>
+          <Text
+            style={styles.statValue}
+            testID={`ui-smoke-stress-created-${created}`}
+            accessibilityLabel={`ui-smoke-stress-created-${created}`}
+          >
+            {created}
+          </Text>
         </View>
         <View style={styles.stat}>
           <Text style={styles.statLabel}>Fired</Text>
-          <Text style={[styles.statValue, styles.statValueFired]}>{fired}</Text>
+          <Text
+            style={[styles.statValue, styles.statValueFired]}
+            testID={`ui-smoke-stress-fired-${fired}`}
+            accessibilityLabel={`ui-smoke-stress-fired-${fired}`}
+          >
+            {fired}
+          </Text>
         </View>
         <View style={styles.stat}>
           <Text style={styles.statLabel}>Pending</Text>
@@ -71,6 +98,8 @@ export function StressTest() {
                 ? styles.statValuePending
                 : styles.statValuePendingDone,
             ]}
+            testID={`ui-smoke-stress-pending-${pending}`}
+            accessibilityLabel={`ui-smoke-stress-pending-${pending}`}
           >
             {pending}
           </Text>
@@ -80,6 +109,9 @@ export function StressTest() {
         style={[styles.btn, running ? styles.btnDisabled : styles.btnGreen]}
         onPress={runTest}
         disabled={running}
+        testID="ui-smoke-stress-create-100"
+        accessibilityLabel="ui-smoke-stress-create-100"
+        accessibilityRole="button"
       >
         <Text style={styles.btnText}>
           {running ? 'Running...' : 'Create 100 Timers'}

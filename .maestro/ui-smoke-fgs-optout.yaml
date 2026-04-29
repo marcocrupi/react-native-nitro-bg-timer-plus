@@ -1,0 +1,13 @@
+appId: "${APP_ID}"
+---
+- launchApp:
+    clearState: false
+- openLink: "${SMOKE_URL}"
+
+- scrollUntilVisible:
+    element:
+      id: ui-smoke-background-disable-fgs
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: ui-smoke-background-disable-fgs

@@ -3,6 +3,12 @@ import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 import { Section } from '../components/Section'
 import { useLog } from '../context/LogContext'
+import {
+  passUiSmokeAction,
+  runUiSmokeAction,
+  startUiSmokeAction,
+  type UiSmokeActionToken,
+} from '../smoke/uiSmoke'
 
 const INTERVALS = [500, 1000, 1500, 2000, 3000]
 
@@ -17,6 +23,7 @@ export function ConcurrentTimers() {
     INTERVALS.map((interval) => ({ id: null, count: 0, interval }))
   )
   const timersRef = useRef(timers)
+  const startAllTokenRef = useRef<UiSmokeActionToken | null>(null)
   timersRef.current = timers
   const { addLog } = useLog()
 
@@ -31,6 +38,11 @@ export function ConcurrentTimers() {
   const running = timers.some((t) => t.id !== null)
 
   const startAll = useCallback(() => {
+    startAllTokenRef.current = startUiSmokeAction(
+      'concurrent',
+      'start-all',
+      addLog
+    )
     timersRef.current.forEach((t) => {
       if (t.id !== null) BackgroundTimer.clearInterval(t.id)
     })
@@ -39,6 +51,10 @@ export function ConcurrentTimers() {
         setTimers((prev) =>
           prev.map((t, i) => (i === idx ? { ...t, count: t.count + 1 } : t))
         )
+        if (startAllTokenRef.current !== null) {
+          passUiSmokeAction(startAllTokenRef.current, addLog)
+          startAllTokenRef.current = null
+        }
       }, interval)
       return { id, count: 0, interval }
     })
@@ -47,28 +63,34 @@ export function ConcurrentTimers() {
   }, [addLog])
 
   const stopAll = useCallback(() => {
-    timersRef.current.forEach((t) => {
-      if (t.id !== null) BackgroundTimer.clearInterval(t.id)
+    runUiSmokeAction('concurrent', 'stop-all', addLog, () => {
+      timersRef.current.forEach((t) => {
+        if (t.id !== null) BackgroundTimer.clearInterval(t.id)
+      })
+      startAllTokenRef.current = null
+      setTimers(INTERVALS.map((interval) => ({ id: null, count: 0, interval })))
+      addLog('[Concurrent] Stopped all timers')
     })
-    setTimers(INTERVALS.map((interval) => ({ id: null, count: 0, interval })))
-    addLog('[Concurrent] Stopped all timers')
   }, [addLog])
 
   const stopRandom = useCallback(() => {
-    const activeIndices = timersRef.current
-      .map((t, i) => (t.id !== null ? i : -1))
-      .filter((i) => i >= 0)
-    if (activeIndices.length === 0) return
+    runUiSmokeAction('concurrent', 'stop-random', addLog, () => {
+      const activeIndices = timersRef.current
+        .map((t, i) => (t.id !== null ? i : -1))
+        .filter((i) => i >= 0)
+      if (activeIndices.length === 0) return
 
-    const idx = activeIndices[Math.floor(Math.random() * activeIndices.length)]!
-    const timer = timersRef.current[idx]!
-    if (timer.id !== null) {
-      BackgroundTimer.clearInterval(timer.id)
-    }
-    setTimers((prev) =>
-      prev.map((t, i) => (i === idx ? { ...t, id: null } : t))
-    )
-    addLog(`[Concurrent] Stopped timer ${timer.interval}ms`)
+      const idx =
+        activeIndices[Math.floor(Math.random() * activeIndices.length)]!
+      const timer = timersRef.current[idx]!
+      if (timer.id !== null) {
+        BackgroundTimer.clearInterval(timer.id)
+      }
+      setTimers((prev) =>
+        prev.map((t, i) => (i === idx ? { ...t, id: null } : t))
+      )
+      addLog(`[Concurrent] Stopped timer ${timer.interval}ms`)
+    })
   }, [addLog])
 
   return (
@@ -83,7 +105,13 @@ export function ConcurrentTimers() {
             ]}
           >
             <Text style={styles.timerInterval}>{t.interval}ms</Text>
-            <Text style={styles.timerCount}>{t.count}</Text>
+            <Text
+              style={styles.timerCount}
+              testID={`ui-smoke-concurrent-timer-${i}-count-${t.count}`}
+              accessibilityLabel={`ui-smoke-concurrent-timer-${i}-count-${t.count}`}
+            >
+              {t.count}
+            </Text>
             <View
               style={[
                 styles.dot,
@@ -98,6 +126,9 @@ export function ConcurrentTimers() {
           style={[styles.btn, styles.btnGreen, running && styles.btnDisabled]}
           onPress={startAll}
           disabled={running}
+          testID="ui-smoke-concurrent-start-all"
+          accessibilityLabel="ui-smoke-concurrent-start-all"
+          accessibilityRole="button"
         >
           <Text style={styles.btnText}>Start All</Text>
         </Pressable>
@@ -105,6 +136,9 @@ export function ConcurrentTimers() {
           style={[styles.btn, styles.btnOrange, !running && styles.btnDisabled]}
           onPress={stopRandom}
           disabled={!running}
+          testID="ui-smoke-concurrent-stop-random"
+          accessibilityLabel="ui-smoke-concurrent-stop-random"
+          accessibilityRole="button"
         >
           <Text style={styles.btnText}>Stop Random</Text>
         </Pressable>
@@ -112,6 +146,9 @@ export function ConcurrentTimers() {
           style={[styles.btn, styles.btnRed, !running && styles.btnDisabled]}
           onPress={stopAll}
           disabled={!running}
+          testID="ui-smoke-concurrent-stop-all"
+          accessibilityLabel="ui-smoke-concurrent-stop-all"
+          accessibilityRole="button"
         >
           <Text style={styles.btnText}>Stop All</Text>
         </Pressable>

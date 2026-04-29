@@ -16,7 +16,13 @@ export function LogView() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Log</Text>
-        <Pressable onPress={clearLog} style={styles.clearBtn}>
+        <Pressable
+          onPress={clearLog}
+          style={styles.clearBtn}
+          testID="ui-smoke-log-clear"
+          accessibilityLabel="ui-smoke-log-clear"
+          accessibilityRole="button"
+        >
           <Text style={styles.clearText}>Clear</Text>
         </Pressable>
       </View>

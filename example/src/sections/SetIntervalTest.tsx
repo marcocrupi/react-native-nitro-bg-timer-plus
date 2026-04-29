@@ -3,36 +3,62 @@ import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 import { Section } from '../components/Section'
 import { useLog } from '../context/LogContext'
+import {
+  passUiSmokeAction,
+  runUiSmokeAction,
+  startUiSmokeAction,
+  type UiSmokeActionToken,
+} from '../smoke/uiSmoke'
 
 export function SetIntervalTest() {
   const [seconds, setSeconds] = useState(0)
   const [running, setRunning] = useState(false)
   const intervalRef = useRef<number | null>(null)
+  const startTokenRef = useRef<UiSmokeActionToken | null>(null)
   const { addLog } = useLog()
 
   const start = useCallback(() => {
     if (intervalRef.current) return
+    startTokenRef.current = startUiSmokeAction(
+      'set-interval',
+      'start',
+      addLog
+    )
     setRunning(true)
     addLog('[setInterval] Started counter')
     intervalRef.current = BackgroundTimer.setInterval(() => {
       setSeconds((prev) => prev + 1)
+      if (startTokenRef.current !== null) {
+        passUiSmokeAction(startTokenRef.current, addLog)
+        startTokenRef.current = null
+      }
     }, 1000)
   }, [addLog])
 
   const stop = useCallback(() => {
-    if (intervalRef.current) {
-      BackgroundTimer.clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
-    setRunning(false)
-    addLog('[setInterval] Stopped counter')
+    runUiSmokeAction('set-interval', 'stop', addLog, () => {
+      if (intervalRef.current) {
+        BackgroundTimer.clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+      startTokenRef.current = null
+      setRunning(false)
+      addLog('[setInterval] Stopped counter')
+    })
   }, [addLog])
 
   const reset = useCallback(() => {
-    stop()
-    setSeconds(0)
-    addLog('[setInterval] Reset counter')
-  }, [stop, addLog])
+    runUiSmokeAction('set-interval', 'reset', addLog, () => {
+      if (intervalRef.current) {
+        BackgroundTimer.clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+      startTokenRef.current = null
+      setRunning(false)
+      setSeconds(0)
+      addLog('[setInterval] Reset counter')
+    })
+  }, [addLog])
 
   useEffect(() => {
     return () => {
@@ -44,12 +70,21 @@ export function SetIntervalTest() {
 
   return (
     <Section title="2. setInterval Counter">
-      <Text style={styles.counter}>{seconds}s</Text>
+      <Text
+        style={styles.counter}
+        testID={`ui-smoke-set-interval-seconds-${seconds}`}
+        accessibilityLabel={`ui-smoke-set-interval-seconds-${seconds}`}
+      >
+        {seconds}s
+      </Text>
       <View style={styles.row}>
         <Pressable
           style={[styles.btn, styles.btnGreen, running && styles.btnDisabled]}
           onPress={start}
           disabled={running}
+          testID="ui-smoke-set-interval-start"
+          accessibilityLabel="ui-smoke-set-interval-start"
+          accessibilityRole="button"
         >
           <Text style={styles.btnText}>Start</Text>
         </Pressable>
@@ -57,10 +92,19 @@ export function SetIntervalTest() {
           style={[styles.btn, styles.btnOrange, !running && styles.btnDisabled]}
           onPress={stop}
           disabled={!running}
+          testID="ui-smoke-set-interval-stop"
+          accessibilityLabel="ui-smoke-set-interval-stop"
+          accessibilityRole="button"
         >
           <Text style={styles.btnText}>Stop</Text>
         </Pressable>
-        <Pressable style={[styles.btn, styles.btnRed]} onPress={reset}>
+        <Pressable
+          style={[styles.btn, styles.btnRed]}
+          onPress={reset}
+          testID="ui-smoke-set-interval-reset"
+          accessibilityLabel="ui-smoke-set-interval-reset"
+          accessibilityRole="button"
+        >
           <Text style={styles.btnText}>Reset</Text>
         </Pressable>
       </View>

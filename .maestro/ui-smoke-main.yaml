@@ -1,0 +1,141 @@
+appId: "${APP_ID}"
+---
+- launchApp:
+    clearState: false
+- openLink: "${SMOKE_URL}"
+
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-set-timeout-schedule
+    timeout: 10000
+- tapOn:
+    id: ui-smoke-set-timeout-schedule
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-set-timeout-status-fired
+    timeout: 5000
+- tapOn:
+    id: ui-smoke-set-timeout-schedule
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-set-timeout-status-pending
+    timeout: 5000
+- tapOn:
+    id: ui-smoke-set-timeout-cancel
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-set-timeout-status-cancelled
+    timeout: 5000
+
+- tapOn:
+    id: ui-smoke-set-interval-start
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-set-interval-seconds-1
+    timeout: 5000
+- tapOn:
+    id: ui-smoke-set-interval-stop
+- tapOn:
+    id: ui-smoke-set-interval-reset
+
+- scrollUntilVisible:
+    element:
+      id: ui-smoke-background-js-comparison
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: ui-smoke-background-js-comparison
+- tapOn:
+    id: ui-smoke-background-configure-notification
+- tapOn:
+    id: ui-smoke-background-start-mode
+- tapOn:
+    id: ui-smoke-background-stop-mode
+- tapOn:
+    id: ui-smoke-background-start
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-background-native-1
+    timeout: 6000
+- tapOn:
+    id: ui-smoke-background-stop
+
+- scrollUntilVisible:
+    element:
+      id: ui-smoke-concurrent-start-all
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: ui-smoke-concurrent-start-all
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-concurrent-timer-0-count-1
+    timeout: 6000
+- tapOn:
+    id: ui-smoke-concurrent-stop-all
+
+- scrollUntilVisible:
+    element:
+      id: ui-smoke-cleanup-mount
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: ui-smoke-cleanup-mount
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-cleanup-ticks-1
+    timeout: 6000
+- tapOn:
+    id: ui-smoke-cleanup-unmount
+
+- scrollUntilVisible:
+    element:
+      id: ui-smoke-hook-start
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: ui-smoke-hook-start
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-hook-count-1
+    timeout: 6000
+- tapOn:
+    id: ui-smoke-hook-restart
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-hook-count-0
+    timeout: 3000
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-hook-count-1
+    timeout: 6000
+- tapOn:
+    id: ui-smoke-hook-stop
+
+- scrollUntilVisible:
+    element:
+      id: ui-smoke-stress-create-100
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: ui-smoke-stress-create-100
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-stress-created-100
+    timeout: 3000
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-stress-pending-0
+    timeout: 12000
+
+- scrollUntilVisible:
+    element:
+      id: ui-smoke-core-run
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: ui-smoke-core-run
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-core-status-pass
+    timeout: 40000

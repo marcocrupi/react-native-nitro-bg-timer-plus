@@ -3,6 +3,12 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 import { Section } from '../components/Section'
 import { useLog } from '../context/LogContext'
+import {
+  failUiSmokeAction,
+  passUiSmokeAction,
+  startUiSmokeAction,
+  type UiSmokeActionToken,
+} from '../smoke/uiSmoke'
 
 const INTERVALS = [800, 1200, 2000]
 
@@ -45,9 +51,17 @@ function TimerChild({
 export function CleanupTest() {
   const [mounted, setMounted] = useState(false)
   const [localLogs, setLocalLogs] = useState<{ id: number; msg: string }[]>([])
+  const cleanupTickCount = localLogs.filter((entry) =>
+    entry.msg.startsWith('Timer ')
+  ).length
   const localLogIdRef = useRef(0)
   const { addLog } = useLog()
   const scrollRef = useRef<ScrollView>(null)
+  const mountTokenRef = useRef<UiSmokeActionToken | null>(null)
+  const unmountTokenRef = useRef<UiSmokeActionToken | null>(null)
+  const unmountVerificationRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
 
   const handleLog = useCallback(
     (msg: string) => {
@@ -55,9 +69,58 @@ export function CleanupTest() {
       const id = localLogIdRef.current
       setLocalLogs((prev) => [...prev.slice(-49), { id, msg }])
       addLog(`[Cleanup] ${msg}`)
+      if (msg.startsWith('Timer ') && mountTokenRef.current !== null) {
+        passUiSmokeAction(mountTokenRef.current, addLog)
+        mountTokenRef.current = null
+      }
+      if (msg.startsWith('Timer ') && unmountTokenRef.current !== null) {
+        failUiSmokeAction(
+          unmountTokenRef.current,
+          'tick_after_unmount',
+          addLog
+        )
+        unmountTokenRef.current = null
+      }
     },
     [addLog]
   )
+
+  const toggleMounted = useCallback(() => {
+    if (mounted) {
+      const unmountToken = startUiSmokeAction('cleanup', 'unmount', addLog)
+      unmountTokenRef.current = unmountToken
+      mountTokenRef.current = null
+      setMounted(false)
+
+      if (unmountVerificationRef.current !== null) {
+        clearTimeout(unmountVerificationRef.current)
+      }
+
+      unmountVerificationRef.current = setTimeout(() => {
+        if (unmountTokenRef.current === unmountToken) {
+          passUiSmokeAction(unmountToken, addLog)
+          unmountTokenRef.current = null
+        }
+        unmountVerificationRef.current = null
+      }, 750)
+      return
+    }
+
+    if (unmountVerificationRef.current !== null) {
+      clearTimeout(unmountVerificationRef.current)
+      unmountVerificationRef.current = null
+    }
+    mountTokenRef.current = startUiSmokeAction('cleanup', 'mount', addLog)
+    setMounted(true)
+  }, [addLog, mounted])
+
+  useEffect(() => {
+    return () => {
+      if (unmountVerificationRef.current !== null) {
+        clearTimeout(unmountVerificationRef.current)
+      }
+    }
+  }, [])
 
   return (
     <Section title="5. Cleanup on Unmount">
@@ -67,7 +130,12 @@ export function CleanupTest() {
       </Text>
       <Pressable
         style={[styles.btn, mounted ? styles.btnRed : styles.btnGreen]}
-        onPress={() => setMounted((v) => !v)}
+        onPress={toggleMounted}
+        testID={mounted ? 'ui-smoke-cleanup-unmount' : 'ui-smoke-cleanup-mount'}
+        accessibilityLabel={
+          mounted ? 'ui-smoke-cleanup-unmount' : 'ui-smoke-cleanup-mount'
+        }
+        accessibilityRole="button"
       >
         <Text style={styles.btnText}>
           {mounted ? 'Unmount Component' : 'Mount Component'}
@@ -78,6 +146,8 @@ export function CleanupTest() {
         ref={scrollRef}
         style={styles.logBox}
         nestedScrollEnabled
+        testID={`ui-smoke-cleanup-ticks-${cleanupTickCount}`}
+        accessibilityLabel={`ui-smoke-cleanup-ticks-${cleanupTickCount}`}
         onContentSizeChange={() =>
           scrollRef.current?.scrollToEnd({ animated: false })
         }

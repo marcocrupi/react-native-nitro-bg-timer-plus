@@ -3,10 +3,18 @@ import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { Section } from '../components/Section'
 import { useLog } from '../context/LogContext'
 import { useBackgroundTimer } from '../hooks/useBackgroundTimer'
+import {
+  passUiSmokeAction,
+  runUiSmokeAction,
+  startUiSmokeAction,
+  type UiSmokeActionToken,
+} from '../smoke/uiSmoke'
 
 export function HookTest() {
   const [count, setCount] = useState(0)
   const countRef = useRef(0)
+  const startTokenRef = useRef<UiSmokeActionToken | null>(null)
+  const restartTokenRef = useRef<UiSmokeActionToken | null>(null)
   const { addLog } = useLog()
 
   const { start, stop, restart, isRunning } = useBackgroundTimer(
@@ -15,14 +23,49 @@ export function HookTest() {
       const next = countRef.current
       setCount(next)
       addLog(`[Hook] Tick #${next}`)
+      if (startTokenRef.current !== null) {
+        passUiSmokeAction(startTokenRef.current, addLog)
+        startTokenRef.current = null
+      }
+      if (restartTokenRef.current !== null) {
+        passUiSmokeAction(restartTokenRef.current, addLog)
+        restartTokenRef.current = null
+      }
     },
     1000,
     false
   )
 
+  const startWithSmoke = () => {
+    startTokenRef.current = startUiSmokeAction('hook', 'start', addLog)
+    start()
+  }
+
+  const stopWithSmoke = () => {
+    runUiSmokeAction('hook', 'stop', addLog, () => {
+      startTokenRef.current = null
+      restartTokenRef.current = null
+      stop()
+    })
+  }
+
+  const restartWithSmoke = () => {
+    restartTokenRef.current = startUiSmokeAction('hook', 'restart', addLog)
+    startTokenRef.current = null
+    countRef.current = 0
+    setCount(0)
+    restart()
+  }
+
   return (
     <Section title="6. useBackgroundTimer Hook">
-      <Text style={styles.counter}>{count}</Text>
+      <Text
+        style={styles.counter}
+        testID={`ui-smoke-hook-count-${count}`}
+        accessibilityLabel={`ui-smoke-hook-count-${count}`}
+      >
+        {count}
+      </Text>
       <View style={styles.statusRow}>
         <View
           style={[
@@ -30,32 +73,41 @@ export function HookTest() {
             isRunning ? styles.indicatorActive : styles.indicatorInactive,
           ]}
         />
-        <Text style={styles.statusText}>
+        <Text
+          style={styles.statusText}
+          testID={`ui-smoke-hook-status-${isRunning ? 'running' : 'stopped'}`}
+          accessibilityLabel={`ui-smoke-hook-status-${isRunning ? 'running' : 'stopped'}`}
+        >
           {isRunning ? 'Running' : 'Stopped'}
         </Text>
       </View>
       <View style={styles.row}>
         <Pressable
           style={[styles.btn, styles.btnGreen, isRunning && styles.btnDisabled]}
-          onPress={start}
+          onPress={startWithSmoke}
           disabled={isRunning}
+          testID="ui-smoke-hook-start"
+          accessibilityLabel="ui-smoke-hook-start"
+          accessibilityRole="button"
         >
           <Text style={styles.btnText}>Start</Text>
         </Pressable>
         <Pressable
           style={[styles.btn, styles.btnOrange, !isRunning && styles.btnDisabled]}
-          onPress={stop}
+          onPress={stopWithSmoke}
           disabled={!isRunning}
+          testID="ui-smoke-hook-stop"
+          accessibilityLabel="ui-smoke-hook-stop"
+          accessibilityRole="button"
         >
           <Text style={styles.btnText}>Stop</Text>
         </Pressable>
         <Pressable
           style={[styles.btn, styles.btnBlue]}
-          onPress={() => {
-            countRef.current = 0
-            setCount(0)
-            restart()
-          }}
+          onPress={restartWithSmoke}
+          testID="ui-smoke-hook-restart"
+          accessibilityLabel="ui-smoke-hook-restart"
+          accessibilityRole="button"
         >
           <Text style={styles.btnText}>Restart</Text>
         </Pressable>
