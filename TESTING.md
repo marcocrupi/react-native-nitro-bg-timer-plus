@@ -12,6 +12,17 @@ cleanup all require manual verification on each platform.
 3. Open the example app on a physical device (Android: USB debugging on;
    iOS: trusted developer profile)
 
+## Current validation status
+
+- Core smoke iOS physical device: validated with `RESULT PASS`.
+- Core smoke Android physical device foreground: validated with `RESULT PASS`.
+- Core smoke Android physical device background: validated with `RESULT PASS`.
+- UI smoke iOS simulator main flow: validated with `RESULT PASS`.
+- Maestro on physical iPhone: best-effort because local driver setup and
+  signing can fail outside the library runtime.
+- Android real-device UI smoke: not yet validated.
+- Real-device `fgs-optout` smoke: not yet validated.
+
 ## Automated smoke test
 
 The example app exposes a smoke mode via:
@@ -128,9 +139,10 @@ not build, install, terminate the app, capture logs, or wait for
 so in manual mode they may appear in Metro or Xcode rather than the script.
 
 The smoke covers public `BackgroundTimer` API behavior for `setTimeout`,
-`clearTimeout`, `setInterval`, `clearInterval`, observable event delivery,
-batch ordering, reentrant scheduling, a short background-ready interval, and
-final `dispose()`. The scripts exit with:
+`clearTimeout`, `setInterval`, `clearInterval`, callback-free timer delivery
+through the native fired-event queue and JS drain, batch ordering, reentrant
+scheduling, a short background-ready interval, and final `dispose()`. The
+scripts exit with:
 
 ```txt
 0   RESULT PASS
@@ -229,6 +241,8 @@ bash scripts/ui-smoke-android.sh --device <serial>
 bash scripts/ui-smoke-android.sh --flow fgs-optout --device <serial>
 ```
 
+Current status: Android physical-device UI smoke has not yet been validated.
+
 iOS simulator:
 
 ```sh
@@ -238,7 +252,8 @@ bash scripts/ui-smoke-ios.sh --simulator <udid>
 
 iOS UI smoke with Maestro is simulator-first. The flow is foreground-only and
 presses app UI controls, so a booted simulator is the recommended target for
-the automated UI button smoke.
+the automated UI button smoke. The simulator main flow has been validated
+with `RESULT PASS`.
 
 iOS physical device:
 
@@ -274,6 +289,8 @@ example app process is already running unless `--install` is used:
 bash scripts/ui-smoke-android.sh --flow fgs-optout
 bash scripts/ui-smoke-ios.sh --flow fgs-optout
 ```
+
+Current status: real-device `fgs-optout` smoke has not yet been validated.
 
 The UI button smoke does not validate true background/Home behavior, iOS
 background execution, lock-screen behavior, or OEM Android background policy.
@@ -358,15 +375,18 @@ verify that manually calling `dispose()` before reload works as expected.
 - [ ] Verify no errors in logcat
 - [ ] Verify wake lock released after the last one fires (via `dumpsys power`)
 
-### A9 — Cross-thread callback verification
+### A9 — Callback-free fired-event delivery verification
 
-This closes the loop on the JSI `AsyncJSCallback` dispatcher guarantee: the
-worker `HandlerThread` invokes the callback on a non-main thread, Nitro
-marshals it back to JS via `CallInvoker`.
+This closes the loop on the callback-free timer fire path: the worker
+`HandlerThread` records a fired timer event, native emits the timers-available
+signal, and JS drains the queue before invoking the callback stored in the
+public `BackgroundTimer` wrapper.
 
 - [ ] Start a single `BackgroundTimer.setTimeout(() => console.log('fired'), 1000)`
 - [ ] Verify the log appears in Metro and no JSI errors are printed
 - [ ] Verify no `Tried to access JS runtime from non-JS thread` error
+- [ ] Verify no generated Nitro callback-wrapper error is printed for timer
+      fire delivery
 
 ### A10 — Implicit foreground service activation
 
@@ -496,16 +516,40 @@ app does not expose direct calls in this order.
 - [ ] Clear the timer and call `configure()` again — verify it succeeds after
       no timer is accepted, pending, or active
 
-### A18 — Callback failure policy (technical/instrumented)
+### A18 — JS callback failure policy after callback-free native delivery
+
+Use a temporary dev button/test harness or a focused unit/integration test; a
+throwing callback can intentionally surface a JS error/RedBox.
 
 - [ ] Schedule a timeout whose callback throws a normal JS `Error`
-- [ ] Verify Android logs the recoverable callback failure and native cleanup
-      still removes the timeout
+- [ ] Verify native timer delivery does not crash in a generated Nitro callback
+      wrapper; the error is surfaced from the JS drain path
+- [ ] Verify the timeout callback is removed after the throw and does not fire
+      again
 - [ ] Schedule an interval whose callback throws a normal JS `Error`
-- [ ] Verify Android logs the recoverable failure and the interval can continue
-      until explicitly cleared
-- [ ] Verify fatal JVM errors are not swallowed by the callback guard
-      (instrumented/native-only; do not simulate this in the example app)
+- [ ] Verify the interval callback remains registered until explicitly cleared
+      by `BackgroundTimer.clearInterval(id)`
+
+### A19 — Foreground service STARTING pending-stop race (API 36 regression gate)
+
+Purpose: verify the Android foreground-service lifecycle fix for the race
+where a stop arrived while a foreground-service request was still `STARTING`.
+The fix avoids invalidating that request before `Service.onStartCommand()` can
+call `startForeground()`.
+
+- [ ] Use an Android API 36 physical device or emulator with the example app
+      installed and Metro running
+- [ ] Start a timer or explicit background mode, then clear/stop it quickly so
+      a stop can arrive while the service start is still in flight
+- [ ] Verify logcat contains
+      `Foreground service stop requested while starting; deferring until service start`
+      when the race is hit
+- [ ] Verify the service is allowed to call `startForeground()` and then stops
+      cleanly if there is no remaining demand
+- [ ] Verify no `ForegroundServiceDidNotStartInTimeException` appears in
+      logcat
+- [ ] Verify a later timer or explicit `startBackgroundMode()` call can start
+      the foreground service again
 
 ## iOS tests
 
@@ -562,14 +606,17 @@ app does not expose direct calls in this order.
 - [ ] Verify dispose prevents late callback delivery and releases the
       background task
 
-### I8 — Callback exception boundary limitation
+### I8 — Callback-free delivery on iOS
 
-The iOS Swift timeout cleanup hardening is not a universal C++/JSI
-exception barrier. A real barrier would need to live near the generated
-Nitro `noexcept` callback boundary.
+The iOS timer fire path should not use generated Nitro callback wrappers for
+timer delivery. Native records fired timer events, emits the timers-available
+signal, and JS drains the queue through the public `BackgroundTimer` wrapper.
 
-- [ ] Treat user-callback exception behavior on iOS as a technical/native
-      boundary test, not as a manual app checklist item
+- [ ] Run the automated core smoke on a physical iOS device and verify
+      `RESULT PASS`
+- [ ] Start a manual timeout and interval; verify callbacks run in JS
+- [ ] Verify no generated Nitro callback-wrapper error is printed for timer
+      fire delivery
 - [ ] Verify timeout cleanup behavior with normal clear/dispose paths instead
       of relying on thrown JS errors as a guaranteed recoverable path
 

@@ -171,6 +171,15 @@ for details, including how to request the required
 
 The main API object providing background-safe timer functionality.
 
+The public `BackgroundTimer` API is unchanged: application code still passes
+callbacks to `BackgroundTimer.setTimeout()` and
+`BackgroundTimer.setInterval()`, and receives numeric timer IDs for clearing.
+Internally, those callbacks stay in the JS wrapper. Native code records fired
+timer events in a small queue and emits a signal; the JS wrapper drains that
+queue and invokes the matching JS callbacks. The low-level Nitro object and
+its `drainFiredTimers()` method are implementation details and are not the
+recommended app-facing API.
+
 #### `setTimeout(callback: () => void, duration: number): number`
 
 Creates a timer that calls the callback function after the specified duration.
@@ -448,14 +457,14 @@ declaration form (or adapt it to your app's specific use case):
 > documentation, which defines it as the catch-all for legitimate
 > FGS use cases that don't fit other typed categories.
 
-If your app does not need accurate background timer scheduling, you
+If your app does not need lower-drift background timer scheduling, you
 can opt out of the foreground service entirely — see the
 [Disabling the foreground service](#disabling-the-foreground-service)
 section below.
 
 ### Disabling the foreground service
 
-If your app does not need accurate background timer scheduling, or
+If your app does not need lower-drift background timer scheduling, or
 if you already have your own foreground service (for media playback,
 location tracking, or another purpose) and don't want a second one
 from this library, you can opt out of the foreground service
@@ -813,13 +822,14 @@ BackgroundTimer.setInterval(() => {
 
 ### Error Handling
 
-Timer callbacks should handle their own errors. On Android, recoverable
-`Throwable`s raised from the native callback path are logged and contained;
-fatal JVM errors such as `VirtualMachineError`, `ThreadDeath`, and
-`LinkageError` are rethrown. On iOS, timeout cleanup is hardened in the
-normal Swift timer path, but the library does not provide a universal
-C++/JSI exception barrier at Nitro's generated `noexcept` callback
-boundary.
+Timer callbacks should handle their own errors. Native timer delivery does
+not retain or invoke JS callback functions directly; native code only records
+fired timer events and signals JS to drain them. User callbacks then run from
+the JS `BackgroundTimer` wrapper. A thrown timeout callback is removed from
+the JS callback map in a cleanup path before the error is rethrown; interval
+callbacks remain registered until you clear them. Treat the library as a
+timer delivery mechanism, not as a universal error boundary for application
+callback failures.
 
 ```ts
 BackgroundTimer.setInterval(() => {
@@ -841,6 +851,9 @@ BackgroundTimer.setInterval(() => {
   timers).
 - All state mutations serialized on a dedicated `HandlerThread` to eliminate
   race conditions between `setTimeout`/`clearTimeout` concurrent callers.
+- Timer fire delivery is callback-free at the native spec boundary: the
+  worker thread records fired timer IDs in a native queue and emits a React
+  Native event so the JS wrapper can drain and execute callbacks.
 - The `HybridObject` registers itself as a `LifecycleEventListener` on the
   `ReactApplicationContext`, so Activity destroy triggers deterministic
   cleanup in both Bridge and Bridgeless modes.
@@ -849,6 +862,9 @@ BackgroundTimer.setInterval(() => {
   crashing.
 - Foreground-service failures are logged and fall back to wake-lock-only
   timing instead of crashing the app.
+- Foreground-service stop requests that arrive while a start is still
+  `STARTING` are deferred until the service has called `startForeground()`,
+  avoiding Android's foreground-service start timeout race.
 
 ### iOS Implementation Details
 
@@ -858,6 +874,8 @@ BackgroundTimer.setInterval(() => {
   state for future best-effort reacquire on background re-entry.
 - Main-thread serialization of all timer state via `DispatchQueue.main.async`
   eliminates cross-thread races.
+- Timer fire delivery records native fired events and signals the JS wrapper
+  to drain them, avoiding generated callback wrappers for timer fire delivery.
 - `deinit` acts as a GC fallback when JS never calls `dispose()`.
 
 ## Troubleshooting
