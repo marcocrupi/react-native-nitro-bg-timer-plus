@@ -9,6 +9,7 @@ import android.os.PowerManager
 import android.os.Process
 import android.util.Log
 import com.facebook.proguard.annotations.DoNotStrip
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.ReactApplicationContext
 import com.margelo.nitro.NitroModules
@@ -53,6 +54,10 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   private val intervalRunnables = ConcurrentHashMap<Int, Runnable>()
   private val acceptedTimeoutIds = ConcurrentHashMap<Int, Boolean>()
   private val acceptedIntervalIds = ConcurrentHashMap<Int, Boolean>()
+  private val firedTimerQueueLock = Any()
+  private val firedTimerQueue = mutableListOf<FiredTimerEvent>()
+  private val pendingIntervalEventIds = mutableSetOf<Int>()
+  private val nextFiredTimerSequence = AtomicLong(1)
 
   // AtomicBoolean (not `@Volatile Boolean`) because `dispose()` uses
   // `compareAndSet(false, true)` to ensure exactly one thread wins the
@@ -171,11 +176,9 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
    *     → `dispose()` → `cleanupAll()`
    *  4. `finalize()` (GC fallback) → `cleanupAll()`
    *
-   * The only residual gap is "user callback that never returns" (e.g. a JS
-   * deadlock holding a timer entry in the map). That is a consumer bug we
-   * cannot protect against at the library level. In dev mode, Fast Refresh
-   * (bundle reload without Activity destroy) also relies on `finalize()` —
-   * non-deterministic, but acceptable as a dev-only limitation.
+   * In dev mode, Fast Refresh (bundle reload without Activity destroy) still
+   * relies on `finalize()` for native cleanup — non-deterministic, but
+   * acceptable as a dev-only limitation.
    *
    * Must be called from the worker thread.
    */
@@ -215,6 +218,10 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     intervalRunnables.clear()
     acceptedTimeoutIds.clear()
     acceptedIntervalIds.clear()
+    synchronized(firedTimerQueueLock) {
+      firedTimerQueue.clear()
+      pendingIntervalEventIds.clear()
+    }
     if (wakeLock.isHeld) {
       try {
         wakeLock.release()
@@ -460,14 +467,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     return posted
   }
 
-  private fun handleTimerCallbackThrowable(timerType: String, timerId: Double, throwable: Throwable) {
-    if (throwable is VirtualMachineError || throwable is ThreadDeath || throwable is LinkageError) {
-      throw throwable
-    }
-
-    Log.e(TAG, "Timer callback failed for $timerType timer id=$timerId", throwable)
-  }
-
   private fun prepareTimerSchedule(operation: String, acceptTimer: () -> Unit): Boolean =
     synchronized(lifecycleLock) {
       if (isDisposed.get()) {
@@ -485,6 +484,70 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       stopForegroundServiceInternal()
     }
   }
+
+  private fun emitTimersAvailable(queueSize: Int) {
+    try {
+      val payload = Arguments.createMap().apply {
+        putInt("count", queueSize)
+      }
+      reactContext.emitDeviceEvent(TIMERS_AVAILABLE_EVENT, payload)
+    } catch (e: Exception) {
+      Log.w(TAG, "Failed to emit $TIMERS_AVAILABLE_EVENT", e)
+    }
+  }
+
+  private fun removeQueuedTimerEvents(id: Int, type: FiredTimerType) {
+    synchronized(firedTimerQueueLock) {
+      firedTimerQueue.removeAll { event ->
+        event.id.toInt() == id && event.type == type
+      }
+      if (type == FiredTimerType.INTERVAL) {
+        pendingIntervalEventIds.remove(id)
+      }
+    }
+  }
+
+  private fun enqueueFiredTimer(id: Int, type: FiredTimerType) {
+    val queueSize = synchronized(firedTimerQueueLock) {
+      if (type == FiredTimerType.INTERVAL && pendingIntervalEventIds.contains(id)) {
+        return
+      }
+
+      if (firedTimerQueue.size >= MAX_FIRED_TIMER_QUEUE_SIZE) {
+        val dropIndex = firedTimerQueue.indexOfFirst { it.type == FiredTimerType.INTERVAL }
+        if (dropIndex >= 0) {
+          val dropped = firedTimerQueue.removeAt(dropIndex)
+          pendingIntervalEventIds.remove(dropped.id.toInt())
+          Log.w(TAG, "Fired timer queue reached cap; dropped a pending interval event")
+        } else {
+          Log.w(TAG, "Fired timer queue reached cap with only timeouts pending; dropping timer id=$id")
+          return
+        }
+      }
+
+      firedTimerQueue.add(
+        FiredTimerEvent(
+          id = id.toDouble(),
+          type = type,
+          sequence = nextFiredTimerSequence.getAndIncrement().toDouble()
+        )
+      )
+      if (type == FiredTimerType.INTERVAL) {
+        pendingIntervalEventIds.add(id)
+      }
+      firedTimerQueue.size
+    }
+
+    emitTimersAvailable(queueSize)
+  }
+
+  override fun drainFiredTimers(): Array<FiredTimerEvent> =
+    synchronized(firedTimerQueueLock) {
+      val events = firedTimerQueue.toTypedArray()
+      firedTimerQueue.clear()
+      pendingIntervalEventIds.clear()
+      events
+    }
 
   // --- Public background-mode API ---
   override fun startBackgroundMode() {
@@ -595,7 +658,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   }
 
   // --- Timeout ---
-  override fun setTimeout(id: Double, duration: Double, callback: (Double) -> Unit) {
+  override fun setTimeout(id: Double, duration: Double) {
     // Implicit foreground service activation: kicks in when the consumer
     // hasn't called startBackgroundMode() explicitly. Called from the JS
     // thread before posting so the service request beats the timer race
@@ -631,9 +694,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         val runnable = Runnable {
           if (isDisposed.get()) return@Runnable
           try {
-            callback(id)
-          } catch (throwable: Throwable) {
-            handleTimerCallbackThrowable("setTimeout", id, throwable)
+            enqueueFiredTimer(intId, FiredTimerType.TIMEOUT)
           } finally {
             timeoutRunnables.remove(intId)
             acceptedTimeoutIds.remove(intId)
@@ -668,13 +729,14 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       timeoutRunnables[intId]?.let { handler.removeCallbacks(it) }
       timeoutRunnables.remove(intId)
       acceptedTimeoutIds.remove(intId)
+      removeQueuedTimerEvents(intId, FiredTimerType.TIMEOUT)
       releaseWakeLockIfNeeded()
       maybeStopForegroundServiceAfterClear()
     }
   }
 
   // --- Interval ---
-  override fun setInterval(id: Double, interval: Double, callback: (Double) -> Unit) {
+  override fun setInterval(id: Double, interval: Double) {
     val intId = id.toInt()
     var acceptedNewTimer = false
     if (!prepareTimerSchedule("setInterval") {
@@ -702,11 +764,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         val runnable = object : Runnable {
           override fun run() {
             if (isDisposed.get()) return
-            try {
-              callback(id)
-            } catch (throwable: Throwable) {
-              handleTimerCallbackThrowable("setInterval", id, throwable)
-            }
+            enqueueFiredTimer(intId, FiredTimerType.INTERVAL)
             // Only reschedule if this interval is still registered and not disposed.
             // Wake lock stays held across ticks — no "renewal" needed (see acquireWakeLock() Kdoc).
             if (intervalRunnables.containsKey(intId) && !isDisposed.get()) {
@@ -747,6 +805,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       intervalRunnables[intId]?.let { handler.removeCallbacks(it) }
       intervalRunnables.remove(intId)
       acceptedIntervalIds.remove(intId)
+      removeQueuedTimerEvents(intId, FiredTimerType.INTERVAL)
       releaseWakeLockIfNeeded()
       maybeStopForegroundServiceAfterClear()
     }
@@ -860,6 +919,8 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   companion object {
     private const val TAG = "NitroBgTimer"
     private const val WAKE_LOCK_TAG = "NitroBgTimer::WakeLock"
+    private const val TIMERS_AVAILABLE_EVENT = "NitroBackgroundTimerTimersAvailable"
+    private const val MAX_FIRED_TIMER_QUEUE_SIZE = 1024
 
     private val nextForegroundServiceOwnerId = AtomicLong(1)
     private val foregroundServiceOwners = ConcurrentHashMap<Long, WeakReference<NitroBackgroundTimer>>()

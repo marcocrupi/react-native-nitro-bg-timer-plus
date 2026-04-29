@@ -12,9 +12,14 @@
 // Forward declaration of `HybridNitroBackgroundTimerSpec_cxx` to properly resolve imports.
 namespace NitroBackgroundTimer { class HybridNitroBackgroundTimerSpec_cxx; }
 
+// Forward declaration of `FiredTimerEvent` to properly resolve imports.
+namespace margelo::nitro::backgroundtimer { struct FiredTimerEvent; }
+// Forward declaration of `FiredTimerType` to properly resolve imports.
+namespace margelo::nitro::backgroundtimer { enum class FiredTimerType; }
 
-
-#include <functional>
+#include "FiredTimerEvent.hpp"
+#include <vector>
+#include "FiredTimerType.hpp"
 #include <string>
 
 #include "NitroBackgroundTimer-Swift-Cxx-Umbrella.hpp"
@@ -67,8 +72,8 @@ namespace margelo::nitro::backgroundtimer {
 
   public:
     // Methods
-    inline void setTimeout(double id, double duration, const std::function<void(double /* id */)>& callback) override {
-      auto __result = _swiftPart.setTimeout(std::forward<decltype(id)>(id), std::forward<decltype(duration)>(duration), callback);
+    inline void setTimeout(double id, double duration) override {
+      auto __result = _swiftPart.setTimeout(std::forward<decltype(id)>(id), std::forward<decltype(duration)>(duration));
       if (__result.hasError()) [[unlikely]] {
         std::rethrow_exception(__result.error());
       }
@@ -79,8 +84,8 @@ namespace margelo::nitro::backgroundtimer {
         std::rethrow_exception(__result.error());
       }
     }
-    inline void setInterval(double id, double interval, const std::function<void(double /* id */)>& callback) override {
-      auto __result = _swiftPart.setInterval(std::forward<decltype(id)>(id), std::forward<decltype(interval)>(interval), callback);
+    inline void setInterval(double id, double interval) override {
+      auto __result = _swiftPart.setInterval(std::forward<decltype(id)>(id), std::forward<decltype(interval)>(interval));
       if (__result.hasError()) [[unlikely]] {
         std::rethrow_exception(__result.error());
       }
@@ -90,6 +95,14 @@ namespace margelo::nitro::backgroundtimer {
       if (__result.hasError()) [[unlikely]] {
         std::rethrow_exception(__result.error());
       }
+    }
+    inline std::vector<FiredTimerEvent> drainFiredTimers() override {
+      auto __result = _swiftPart.drainFiredTimers();
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+      auto __value = std::move(__result.value());
+      return __value;
     }
     inline void startBackgroundMode() override {
       auto __result = _swiftPart.startBackgroundMode();

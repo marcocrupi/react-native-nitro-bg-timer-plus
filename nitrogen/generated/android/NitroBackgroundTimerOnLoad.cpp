@@ -16,7 +16,6 @@
 #include <NitroModules/HybridObjectRegistry.hpp>
 
 #include "JHybridNitroBackgroundTimerSpec.hpp"
-#include "JFunc_void_double.hpp"
 #include <NitroModules/DefaultConstructableObject.hpp>
 
 namespace margelo::nitro::backgroundtimer {
@@ -42,7 +41,6 @@ void registerAllNatives() {
 
   // Register native JNI methods
   margelo::nitro::backgroundtimer::JHybridNitroBackgroundTimerSpec::CxxPart::registerNatives();
-  margelo::nitro::backgroundtimer::JFunc_void_double_cxx::registerNatives();
 
   // Register Nitro Hybrid Objects
   HybridObjectRegistry::registerHybridObjectConstructor(

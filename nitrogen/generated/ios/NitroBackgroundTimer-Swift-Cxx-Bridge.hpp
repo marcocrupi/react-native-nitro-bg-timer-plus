@@ -8,6 +8,10 @@
 #pragma once
 
 // Forward declarations of C++ defined types
+// Forward declaration of `FiredTimerEvent` to properly resolve imports.
+namespace margelo::nitro::backgroundtimer { struct FiredTimerEvent; }
+// Forward declaration of `FiredTimerType` to properly resolve imports.
+namespace margelo::nitro::backgroundtimer { enum class FiredTimerType; }
 // Forward declaration of `HybridNitroBackgroundTimerSpec` to properly resolve imports.
 namespace margelo::nitro::backgroundtimer { class HybridNitroBackgroundTimerSpec; }
 
@@ -16,11 +20,13 @@ namespace margelo::nitro::backgroundtimer { class HybridNitroBackgroundTimerSpec
 namespace NitroBackgroundTimer { class HybridNitroBackgroundTimerSpec_cxx; }
 
 // Include C++ defined types
+#include "FiredTimerEvent.hpp"
+#include "FiredTimerType.hpp"
 #include "HybridNitroBackgroundTimerSpec.hpp"
 #include <NitroModules/Result.hpp>
 #include <exception>
-#include <functional>
 #include <memory>
+#include <vector>
 
 /**
  * Contains specialized versions of C++ templated types so they can be accessed from Swift,
@@ -28,28 +34,17 @@ namespace NitroBackgroundTimer { class HybridNitroBackgroundTimerSpec_cxx; }
  */
 namespace margelo::nitro::backgroundtimer::bridge::swift {
 
-  // pragma MARK: std::function<void(double /* id */)>
+  // pragma MARK: std::vector<FiredTimerEvent>
   /**
-   * Specialized version of `std::function<void(double)>`.
+   * Specialized version of `std::vector<FiredTimerEvent>`.
    */
-  using Func_void_double = std::function<void(double /* id */)>;
-  /**
-   * Wrapper class for a `std::function<void(double / * id * /)>`, this can be used from Swift.
-   */
-  class Func_void_double_Wrapper final {
-  public:
-    explicit Func_void_double_Wrapper(std::function<void(double /* id */)>&& func): _function(std::make_unique<std::function<void(double /* id */)>>(std::move(func))) {}
-    inline void call(double id) const noexcept {
-      _function->operator()(id);
-    }
-  private:
-    std::unique_ptr<std::function<void(double /* id */)>> _function;
-  } SWIFT_NONCOPYABLE;
-  Func_void_double create_Func_void_double(void* NON_NULL swiftClosureWrapper) noexcept;
-  inline Func_void_double_Wrapper wrap_Func_void_double(Func_void_double value) noexcept {
-    return Func_void_double_Wrapper(std::move(value));
+  using std__vector_FiredTimerEvent_ = std::vector<FiredTimerEvent>;
+  inline std::vector<FiredTimerEvent> create_std__vector_FiredTimerEvent_(size_t size) noexcept {
+    std::vector<FiredTimerEvent> vector;
+    vector.reserve(size);
+    return vector;
   }
-  
+
   // pragma MARK: std::shared_ptr<HybridNitroBackgroundTimerSpec>
   /**
    * Specialized version of `std::shared_ptr<HybridNitroBackgroundTimerSpec>`.
@@ -57,11 +52,11 @@ namespace margelo::nitro::backgroundtimer::bridge::swift {
   using std__shared_ptr_HybridNitroBackgroundTimerSpec_ = std::shared_ptr<HybridNitroBackgroundTimerSpec>;
   std::shared_ptr<HybridNitroBackgroundTimerSpec> create_std__shared_ptr_HybridNitroBackgroundTimerSpec_(void* NON_NULL swiftUnsafePointer) noexcept;
   void* NON_NULL get_std__shared_ptr_HybridNitroBackgroundTimerSpec_(std__shared_ptr_HybridNitroBackgroundTimerSpec_ cppType);
-  
+
   // pragma MARK: std::weak_ptr<HybridNitroBackgroundTimerSpec>
   using std__weak_ptr_HybridNitroBackgroundTimerSpec_ = std::weak_ptr<HybridNitroBackgroundTimerSpec>;
   inline std__weak_ptr_HybridNitroBackgroundTimerSpec_ weakify_std__shared_ptr_HybridNitroBackgroundTimerSpec_(const std::shared_ptr<HybridNitroBackgroundTimerSpec>& strong) noexcept { return strong; }
-  
+
   // pragma MARK: Result<void>
   using Result_void_ = Result<void>;
   inline Result_void_ create_Result_void_() noexcept {
@@ -69,6 +64,15 @@ namespace margelo::nitro::backgroundtimer::bridge::swift {
   }
   inline Result_void_ create_Result_void_(const std::exception_ptr& error) noexcept {
     return Result<void>::withError(error);
+  }
+
+  // pragma MARK: Result<std::vector<FiredTimerEvent>>
+  using Result_std__vector_FiredTimerEvent__ = Result<std::vector<FiredTimerEvent>>;
+  inline Result_std__vector_FiredTimerEvent__ create_Result_std__vector_FiredTimerEvent__(const std::vector<FiredTimerEvent>& value) noexcept {
+    return Result<std::vector<FiredTimerEvent>>::withValue(value);
+  }
+  inline Result_std__vector_FiredTimerEvent__ create_Result_std__vector_FiredTimerEvent__(const std::exception_ptr& error) noexcept {
+    return Result<std::vector<FiredTimerEvent>>::withError(error);
   }
 
 } // namespace margelo::nitro::backgroundtimer::bridge::swift

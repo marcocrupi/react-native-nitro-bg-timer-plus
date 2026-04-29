@@ -13,9 +13,11 @@
 #error NitroModules cannot be found! Are you sure you installed NitroModules properly?
 #endif
 
+// Forward declaration of `FiredTimerEvent` to properly resolve imports.
+namespace margelo::nitro::backgroundtimer { struct FiredTimerEvent; }
 
-
-#include <functional>
+#include "FiredTimerEvent.hpp"
+#include <vector>
 #include <string>
 
 namespace margelo::nitro::backgroundtimer {
@@ -49,10 +51,11 @@ namespace margelo::nitro::backgroundtimer {
 
     public:
       // Methods
-      virtual void setTimeout(double id, double duration, const std::function<void(double /* id */)>& callback) = 0;
+      virtual void setTimeout(double id, double duration) = 0;
       virtual void clearTimeout(double id) = 0;
-      virtual void setInterval(double id, double interval, const std::function<void(double /* id */)>& callback) = 0;
+      virtual void setInterval(double id, double interval) = 0;
       virtual void clearInterval(double id) = 0;
+      virtual std::vector<FiredTimerEvent> drainFiredTimers() = 0;
       virtual void startBackgroundMode() = 0;
       virtual void stopBackgroundMode() = 0;
       virtual void configure(const std::string& configJson) = 0;

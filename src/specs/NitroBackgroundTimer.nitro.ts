@@ -1,17 +1,25 @@
 import type { HybridObject } from 'react-native-nitro-modules'
 
+export enum FiredTimerType {
+  Timeout = 0,
+  Interval = 1,
+}
+
+export interface FiredTimerEvent {
+  id: number
+  type: FiredTimerType
+  sequence: number
+}
+
 export interface NitroBackgroundTimer extends HybridObject<{
   ios: 'swift'
   android: 'kotlin'
 }> {
-  setTimeout(id: number, duration: number, callback: (id: number) => void): void
+  setTimeout(id: number, duration: number): void
   clearTimeout(id: number): void
-  setInterval(
-    id: number,
-    interval: number,
-    callback: (id: number) => void
-  ): void
+  setInterval(id: number, interval: number): void
   clearInterval(id: number): void
+  drainFiredTimers(): FiredTimerEvent[]
   /**
    * Explicitly request background mode. On Android, starts a foreground
    * service that keeps the process at foreground scheduling priority for

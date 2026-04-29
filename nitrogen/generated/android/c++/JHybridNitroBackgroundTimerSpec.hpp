@@ -54,10 +54,11 @@ namespace margelo::nitro::backgroundtimer {
 
   public:
     // Methods
-    void setTimeout(double id, double duration, const std::function<void(double /* id */)>& callback) override;
+    void setTimeout(double id, double duration) override;
     void clearTimeout(double id) override;
-    void setInterval(double id, double interval, const std::function<void(double /* id */)>& callback) override;
+    void setInterval(double id, double interval) override;
     void clearInterval(double id) override;
+    std::vector<FiredTimerEvent> drainFiredTimers() override;
     void startBackgroundMode() override;
     void stopBackgroundMode() override;
     void configure(const std::string& configJson) override;

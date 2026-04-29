@@ -7,11 +7,16 @@
 
 #include "JHybridNitroBackgroundTimerSpec.hpp"
 
+// Forward declaration of `FiredTimerEvent` to properly resolve imports.
+namespace margelo::nitro::backgroundtimer { struct FiredTimerEvent; }
+// Forward declaration of `FiredTimerType` to properly resolve imports.
+namespace margelo::nitro::backgroundtimer { enum class FiredTimerType; }
 
-
-#include <functional>
-#include "JFunc_void_double.hpp"
-#include <NitroModules/JNICallable.hpp>
+#include "FiredTimerEvent.hpp"
+#include <vector>
+#include "JFiredTimerEvent.hpp"
+#include "FiredTimerType.hpp"
+#include "JFiredTimerType.hpp"
 #include <string>
 
 namespace margelo::nitro::backgroundtimer {
@@ -47,21 +52,35 @@ namespace margelo::nitro::backgroundtimer {
   
 
   // Methods
-  void JHybridNitroBackgroundTimerSpec::setTimeout(double id, double duration, const std::function<void(double /* id */)>& callback) {
-    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */, double /* duration */, jni::alias_ref<JFunc_void_double::javaobject> /* callback */)>("setTimeout_cxx");
-    method(_javaPart, id, duration, JFunc_void_double_cxx::fromCpp(callback));
+  void JHybridNitroBackgroundTimerSpec::setTimeout(double id, double duration) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */, double /* duration */)>("setTimeout");
+    method(_javaPart, id, duration);
   }
   void JHybridNitroBackgroundTimerSpec::clearTimeout(double id) {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */)>("clearTimeout");
     method(_javaPart, id);
   }
-  void JHybridNitroBackgroundTimerSpec::setInterval(double id, double interval, const std::function<void(double /* id */)>& callback) {
-    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */, double /* interval */, jni::alias_ref<JFunc_void_double::javaobject> /* callback */)>("setInterval_cxx");
-    method(_javaPart, id, interval, JFunc_void_double_cxx::fromCpp(callback));
+  void JHybridNitroBackgroundTimerSpec::setInterval(double id, double interval) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */, double /* interval */)>("setInterval");
+    method(_javaPart, id, interval);
   }
   void JHybridNitroBackgroundTimerSpec::clearInterval(double id) {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */)>("clearInterval");
     method(_javaPart, id);
+  }
+  std::vector<FiredTimerEvent> JHybridNitroBackgroundTimerSpec::drainFiredTimers() {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<jni::JArrayClass<JFiredTimerEvent>>()>("drainFiredTimers");
+    auto __result = method(_javaPart);
+    return [&]() {
+      size_t __size = __result->size();
+      std::vector<FiredTimerEvent> __vector;
+      __vector.reserve(__size);
+      for (size_t __i = 0; __i < __size; __i++) {
+        auto __element = __result->getElement(__i);
+        __vector.push_back(__element->toCpp());
+      }
+      return __vector;
+    }();
   }
   void JHybridNitroBackgroundTimerSpec::startBackgroundMode() {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void()>("startBackgroundMode");

@@ -13,10 +13,11 @@ public protocol HybridNitroBackgroundTimerSpec_protocol: HybridObject {
   
 
   // Methods
-  func setTimeout(id: Double, duration: Double, callback: @escaping (_ id: Double) -> Void) throws -> Void
+  func setTimeout(id: Double, duration: Double) throws -> Void
   func clearTimeout(id: Double) throws -> Void
-  func setInterval(id: Double, interval: Double, callback: @escaping (_ id: Double) -> Void) throws -> Void
+  func setInterval(id: Double, interval: Double) throws -> Void
   func clearInterval(id: Double) throws -> Void
+  func drainFiredTimers() throws -> [FiredTimerEvent]
   func startBackgroundMode() throws -> Void
   func stopBackgroundMode() throws -> Void
   func configure(configJson: String) throws -> Void

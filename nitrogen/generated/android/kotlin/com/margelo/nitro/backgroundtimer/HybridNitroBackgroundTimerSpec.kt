@@ -25,47 +25,41 @@ import com.margelo.nitro.core.HybridObject
 )
 abstract class HybridNitroBackgroundTimerSpec: HybridObject() {
   // Properties
-  
+
 
   // Methods
-  abstract fun setTimeout(id: Double, duration: Double, callback: (id: Double) -> Unit): Unit
-  
   @DoNotStrip
   @Keep
-  private fun setTimeout_cxx(id: Double, duration: Double, callback: Func_void_double): Unit {
-    val __result = setTimeout(id, duration, callback)
-    return __result
-  }
-  
+  abstract fun setTimeout(id: Double, duration: Double): Unit
+
   @DoNotStrip
   @Keep
   abstract fun clearTimeout(id: Double): Unit
-  
-  abstract fun setInterval(id: Double, interval: Double, callback: (id: Double) -> Unit): Unit
-  
+
   @DoNotStrip
   @Keep
-  private fun setInterval_cxx(id: Double, interval: Double, callback: Func_void_double): Unit {
-    val __result = setInterval(id, interval, callback)
-    return __result
-  }
-  
+  abstract fun setInterval(id: Double, interval: Double): Unit
+
   @DoNotStrip
   @Keep
   abstract fun clearInterval(id: Double): Unit
-  
+
+  @DoNotStrip
+  @Keep
+  abstract fun drainFiredTimers(): Array<FiredTimerEvent>
+
   @DoNotStrip
   @Keep
   abstract fun startBackgroundMode(): Unit
-  
+
   @DoNotStrip
   @Keep
   abstract fun stopBackgroundMode(): Unit
-  
+
   @DoNotStrip
   @Keep
   abstract fun configure(configJson: String): Unit
-  
+
   @DoNotStrip
   @Keep
   abstract fun disableForegroundService(): Unit

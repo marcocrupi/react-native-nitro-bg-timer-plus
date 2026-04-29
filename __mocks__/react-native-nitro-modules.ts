@@ -1,9 +1,19 @@
-type TimerCallback = (id: number) => void
+const TIMERS_AVAILABLE_EVENT = 'NitroBackgroundTimerTimersAvailable'
+
+enum MockFiredTimerType {
+  Timeout = 0,
+  Interval = 1,
+}
+
+interface MockFiredTimerEvent {
+  id: number
+  type: MockFiredTimerType
+  sequence: number
+}
 
 interface CapturedTimer {
   id: number
   duration: number
-  callback: TimerCallback
   type: 'timeout' | 'interval'
   cleared: boolean
 }
@@ -13,6 +23,9 @@ const state = {
   pendingTimers: new Map<number, CapturedTimer>(),
   acceptedTimers: new Map<number, CapturedTimer>(),
   inactiveTimerIds: new Set<number>(),
+  firedTimerQueue: [] as MockFiredTimerEvent[],
+  pendingIntervalEventIds: new Set<number>(),
+  nextSequence: 1,
   isForegroundServiceActive: false,
   isExplicitBackgroundModeRequested: false,
   lastConfigJson: null as string | null,
@@ -42,6 +55,7 @@ const clearAcceptedTimer = (id: number) => {
   state.pendingTimers.delete(id)
   state.timers.delete(id)
   state.acceptedTimers.delete(id)
+  removeQueuedTimerEvents(id)
   updateImplicitForegroundService()
 }
 
@@ -59,40 +73,81 @@ const materializeTimer = (id: number) => {
   return pendingTimer
 }
 
+const removeQueuedTimerEvents = (id: number) => {
+  state.firedTimerQueue = state.firedTimerQueue.filter(
+    (event) => event.id !== id
+  )
+  state.pendingIntervalEventIds.delete(id)
+}
+
+const emitTimersAvailable = () => {
+  const { DeviceEventEmitter } = require('react-native')
+  DeviceEventEmitter.emit(TIMERS_AVAILABLE_EVENT, {
+    count: state.firedTimerQueue.length,
+  })
+}
+
+const enqueueFiredTimer = (timer: CapturedTimer): boolean => {
+  if (
+    timer.type === 'interval' &&
+    state.pendingIntervalEventIds.has(timer.id)
+  ) {
+    return false
+  }
+
+  state.firedTimerQueue.push({
+    id: timer.id,
+    type:
+      timer.type === 'timeout'
+        ? MockFiredTimerType.Timeout
+        : MockFiredTimerType.Interval,
+    sequence: state.nextSequence++,
+  })
+
+  if (timer.type === 'interval') {
+    state.pendingIntervalEventIds.add(timer.id)
+  }
+
+  return true
+}
+
 const mockNativeTimer = {
-  setTimeout: jest.fn(
-    (id: number, duration: number, callback: TimerCallback) => {
-      acceptTimer({
-        id,
-        duration,
-        callback,
-        type: 'timeout',
-        cleared: false,
-      })
-    }
-  ),
+  setTimeout: jest.fn((id: number, duration: number) => {
+    acceptTimer({
+      id,
+      duration,
+      type: 'timeout',
+      cleared: false,
+    })
+  }),
   clearTimeout: jest.fn((id: number) => {
     clearAcceptedTimer(id)
   }),
-  setInterval: jest.fn(
-    (id: number, interval: number, callback: TimerCallback) => {
-      acceptTimer({
-        id,
-        duration: interval,
-        callback,
-        type: 'interval',
-        cleared: false,
-      })
-    }
-  ),
+  setInterval: jest.fn((id: number, interval: number) => {
+    acceptTimer({
+      id,
+      duration: interval,
+      type: 'interval',
+      cleared: false,
+    })
+  }),
   clearInterval: jest.fn((id: number) => {
     clearAcceptedTimer(id)
+  }),
+  drainFiredTimers: jest.fn(() => {
+    const events = state.firedTimerQueue
+    state.firedTimerQueue = []
+    state.pendingIntervalEventIds.clear()
+    return events
   }),
   dispose: jest.fn(() => {
     state.timers.clear()
     state.pendingTimers.clear()
     state.acceptedTimers.clear()
     state.inactiveTimerIds.clear()
+    state.firedTimerQueue = []
+    state.pendingIntervalEventIds.clear()
+    state.nextSequence = 1
     state.isForegroundServiceActive = false
     state.isExplicitBackgroundModeRequested = false
     state.lastConfigJson = null
@@ -155,8 +210,11 @@ export const __mockHelpers = {
       throw new Error(`No timer with id ${id}`)
     }
     if (t.cleared) return
+    const didEnqueue = enqueueFiredTimer(t)
     try {
-      t.callback(id)
+      if (didEnqueue) {
+        emitTimersAvailable()
+      }
     } finally {
       // Mirror native setTimeout semantics: after the Runnable fires, the
       // native side removes the entry from `timeoutRunnables`. Intervals
@@ -172,6 +230,27 @@ export const __mockHelpers = {
       }
     }
   },
+  queueTimer(id: number) {
+    const t = materializeTimer(id)
+    if (!t) {
+      if (state.inactiveTimerIds.has(id)) return false
+      throw new Error(`No timer with id ${id}`)
+    }
+    if (t.cleared) return false
+    const didEnqueue = enqueueFiredTimer(t)
+    if (t.type === 'timeout') {
+      state.timers.delete(id)
+      state.pendingTimers.delete(id)
+      state.acceptedTimers.delete(id)
+      state.inactiveTimerIds.add(id)
+      updateImplicitForegroundService()
+    }
+    return didEnqueue
+  },
+  emitTimersAvailable,
+  queuedFiredTimers(): MockFiredTimerEvent[] {
+    return state.firedTimerQueue
+  },
   getTimer(id: number) {
     return state.timers.get(id)
   },
@@ -180,6 +259,9 @@ export const __mockHelpers = {
     state.pendingTimers.clear()
     state.acceptedTimers.clear()
     state.inactiveTimerIds.clear()
+    state.firedTimerQueue = []
+    state.pendingIntervalEventIds.clear()
+    state.nextSequence = 1
     state.isForegroundServiceActive = false
     state.isExplicitBackgroundModeRequested = false
     state.lastConfigJson = null
@@ -187,6 +269,7 @@ export const __mockHelpers = {
     mockNativeTimer.clearTimeout.mockClear()
     mockNativeTimer.setInterval.mockClear()
     mockNativeTimer.clearInterval.mockClear()
+    mockNativeTimer.drainFiredTimers.mockClear()
     mockNativeTimer.dispose.mockClear()
     mockNativeTimer.startBackgroundMode.mockClear()
     mockNativeTimer.stopBackgroundMode.mockClear()
@@ -225,5 +308,8 @@ export const __mockHelpers = {
   },
   disableForegroundServiceCalls(): number {
     return mockNativeTimer.disableForegroundService.mock.calls.length
+  },
+  drainFiredTimersCalls(): number {
+    return mockNativeTimer.drainFiredTimers.mock.calls.length
   },
 }

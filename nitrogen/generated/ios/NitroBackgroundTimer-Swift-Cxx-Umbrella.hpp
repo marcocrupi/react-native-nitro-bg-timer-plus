@@ -8,16 +8,22 @@
 #pragma once
 
 // Forward declarations of C++ defined types
+// Forward declaration of `FiredTimerEvent` to properly resolve imports.
+namespace margelo::nitro::backgroundtimer { struct FiredTimerEvent; }
+// Forward declaration of `FiredTimerType` to properly resolve imports.
+namespace margelo::nitro::backgroundtimer { enum class FiredTimerType; }
 // Forward declaration of `HybridNitroBackgroundTimerSpec` to properly resolve imports.
 namespace margelo::nitro::backgroundtimer { class HybridNitroBackgroundTimerSpec; }
 
 // Include C++ defined types
+#include "FiredTimerEvent.hpp"
+#include "FiredTimerType.hpp"
 #include "HybridNitroBackgroundTimerSpec.hpp"
 #include <NitroModules/Result.hpp>
 #include <exception>
-#include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 // C++ helpers for Swift
 #include "NitroBackgroundTimer-Swift-Cxx-Bridge.hpp"

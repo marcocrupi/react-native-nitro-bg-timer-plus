@@ -1,6 +1,66 @@
+jest.mock('react-native', () => {
+  type Listener = (payload?: unknown) => void
+
+  const listeners = new Map<string, Set<Listener>>()
+  const DeviceEventEmitter = {
+    addListener: jest.fn((eventName: string, listener: Listener) => {
+      const eventListeners = listeners.get(eventName) ?? new Set<Listener>()
+      eventListeners.add(listener)
+      listeners.set(eventName, eventListeners)
+
+      return {
+        remove: jest.fn(() => {
+          eventListeners.delete(listener)
+        }),
+      }
+    }),
+    emit: jest.fn((eventName: string, payload?: unknown) => {
+      const eventListeners = listeners.get(eventName)
+      if (!eventListeners) return
+
+      for (const listener of Array.from(eventListeners)) {
+        listener(payload)
+      }
+    }),
+    removeAllListeners: jest.fn((eventName?: string) => {
+      if (eventName) {
+        listeners.delete(eventName)
+      } else {
+        listeners.clear()
+      }
+    }),
+  }
+
+  return {
+    DeviceEventEmitter,
+    NativeEventEmitter: jest.fn().mockImplementation(() => DeviceEventEmitter),
+    NativeModules: {
+      NitroBackgroundTimerEventEmitter: {
+        addListener: jest.fn(),
+        removeListeners: jest.fn(),
+      },
+    },
+    Platform: {
+      OS: 'android',
+      select: jest.fn((options: Record<string, unknown>) => options.android),
+    },
+    __resetDeviceEventEmitter: () => {
+      listeners.clear()
+      DeviceEventEmitter.addListener.mockClear()
+      DeviceEventEmitter.emit.mockClear()
+      DeviceEventEmitter.removeAllListeners.mockClear()
+    },
+  }
+})
+
 jest.mock('react-native-nitro-modules', () =>
   require('../../__mocks__/react-native-nitro-modules')
 )
+
+beforeEach(() => {
+  require('react-native').__resetDeviceEventEmitter()
+  require('../../__mocks__/react-native-nitro-modules').__mockHelpers.reset()
+})
 
 describe('BackgroundTimer — ID management', () => {
   it('setTimeout returns a numeric id, and consecutive calls return distinct ids', () => {
@@ -25,6 +85,23 @@ describe('BackgroundTimer — ID management', () => {
 })
 
 describe('BackgroundTimer — callback invocation', () => {
+  it('setTimeout stores the callback in JS and calls native without a callback argument', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        NitroModules,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      const cb = jest.fn()
+      const id = BackgroundTimer.setTimeout(cb, 100)
+      const nativeInstance =
+        NitroModules.createHybridObject.mock.results[0].value
+
+      expect(nativeInstance.setTimeout).toHaveBeenCalledWith(id, 100)
+      expect(nativeInstance.setTimeout.mock.calls[0]).toHaveLength(2)
+      expect(cb).not.toHaveBeenCalled()
+    })
+  })
+
   it('invokes the user callback when the native timer fires', () => {
     jest.isolateModules(() => {
       const { BackgroundTimer } = require('../index')
@@ -35,6 +112,7 @@ describe('BackgroundTimer — callback invocation', () => {
       const id = BackgroundTimer.setTimeout(cb, 100)
       __mockHelpers.fireTimer(id)
       expect(cb).toHaveBeenCalledTimes(1)
+      expect(__mockHelpers.drainFiredTimersCalls()).toBeGreaterThan(0)
     })
   })
 
@@ -74,6 +152,57 @@ describe('BackgroundTimer — callback invocation', () => {
     })
   })
 
+  it('ignores a queued timeout event when clearTimeout runs before drain', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      const cb = jest.fn()
+      const id = BackgroundTimer.setTimeout(cb, 100)
+
+      __mockHelpers.queueTimer(id)
+      BackgroundTimer.clearTimeout(id)
+      __mockHelpers.emitTimersAvailable()
+
+      expect(cb).not.toHaveBeenCalled()
+      expect(__mockHelpers.queuedFiredTimers()).toHaveLength(0)
+    })
+  })
+
+  it('setInterval stores the callback in JS and calls native without a callback argument', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        NitroModules,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      const cb = jest.fn()
+      const id = BackgroundTimer.setInterval(cb, 100)
+      const nativeInstance =
+        NitroModules.createHybridObject.mock.results[0].value
+
+      expect(nativeInstance.setInterval).toHaveBeenCalledWith(id, 100)
+      expect(nativeInstance.setInterval.mock.calls[0]).toHaveLength(2)
+      expect(cb).not.toHaveBeenCalled()
+    })
+  })
+
+  it('invokes the interval callback from event + drain while it is still registered', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      const cb = jest.fn()
+      const id = BackgroundTimer.setInterval(cb, 100)
+
+      __mockHelpers.fireTimer(id)
+
+      expect(cb).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('does not invoke the interval callback after clearInterval', () => {
     jest.isolateModules(() => {
       const { BackgroundTimer } = require('../index')
@@ -85,6 +214,97 @@ describe('BackgroundTimer — callback invocation', () => {
       BackgroundTimer.clearInterval(id)
       __mockHelpers.fireTimer(id)
       expect(cb).not.toHaveBeenCalled()
+    })
+  })
+
+  it('ignores a queued interval event when clearInterval runs before drain', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      const cb = jest.fn()
+      const id = BackgroundTimer.setInterval(cb, 100)
+
+      __mockHelpers.queueTimer(id)
+      BackgroundTimer.clearInterval(id)
+      __mockHelpers.emitTimersAvailable()
+
+      expect(cb).not.toHaveBeenCalled()
+      expect(__mockHelpers.queuedFiredTimers()).toHaveLength(0)
+    })
+  })
+
+  it('processes a batch of fired timer events in FIFO order', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      const calls: string[] = []
+      const firstId = BackgroundTimer.setTimeout(() => calls.push('first'), 100)
+      const secondId = BackgroundTimer.setInterval(
+        () => calls.push('second'),
+        100
+      )
+
+      __mockHelpers.queueTimer(firstId)
+      __mockHelpers.queueTimer(secondId)
+      __mockHelpers.emitTimersAvailable()
+
+      expect(calls).toEqual(['first', 'second'])
+    })
+  })
+
+  it('does not duplicate callbacks when a timersAvailable signal arrives during drain', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      const first = jest.fn(() => {
+        __mockHelpers.emitTimersAvailable()
+      })
+      const second = jest.fn()
+      const firstId = BackgroundTimer.setTimeout(first, 100)
+      const secondId = BackgroundTimer.setTimeout(second, 100)
+
+      __mockHelpers.queueTimer(firstId)
+      __mockHelpers.queueTimer(secondId)
+      __mockHelpers.emitTimersAvailable()
+
+      expect(first).toHaveBeenCalledTimes(1)
+      expect(second).toHaveBeenCalledTimes(1)
+      expect(__mockHelpers.drainFiredTimersCalls()).toBe(2)
+    })
+  })
+
+  it('continues processing a drain batch after an interval callback throws', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      const error = new Error('interval boom')
+      const interval = jest.fn(() => {
+        throw error
+      })
+      const timeout = jest.fn()
+      const intervalId = BackgroundTimer.setInterval(interval, 100)
+      const timeoutId = BackgroundTimer.setTimeout(timeout, 100)
+
+      __mockHelpers.queueTimer(intervalId)
+      __mockHelpers.queueTimer(timeoutId)
+
+      expect(() => {
+        __mockHelpers.emitTimersAvailable()
+      }).toThrow(error)
+      expect(interval).toHaveBeenCalledTimes(1)
+      expect(timeout).toHaveBeenCalledTimes(1)
     })
   })
 })

@@ -84,7 +84,7 @@ open class HybridNitroBackgroundTimerSpec_cxx {
     }
   }
 
-  
+
 
   /**
    * Get the memory size of the Swift class (plus size of any other allocations)
@@ -121,25 +121,20 @@ open class HybridNitroBackgroundTimerSpec_cxx {
   }
 
   // Properties
-  
+
 
   // Methods
   @inline(__always)
-  public final func setTimeout(id: Double, duration: Double, callback: bridge.Func_void_double) -> bridge.Result_void_ {
+  public final func setTimeout(id: Double, duration: Double) -> bridge.Result_void_ {
     do {
-      try self.__implementation.setTimeout(id: id, duration: duration, callback: { () -> (Double) -> Void in
-        let __wrappedFunction = bridge.wrap_Func_void_double(callback)
-        return { (__id: Double) -> Void in
-          __wrappedFunction.call(__id)
-        }
-      }())
+      try self.__implementation.setTimeout(id: id, duration: duration)
       return bridge.create_Result_void_()
     } catch (let __error) {
       let __exceptionPtr = __error.toCpp()
       return bridge.create_Result_void_(__exceptionPtr)
     }
   }
-  
+
   @inline(__always)
   public final func clearTimeout(id: Double) -> bridge.Result_void_ {
     do {
@@ -150,23 +145,18 @@ open class HybridNitroBackgroundTimerSpec_cxx {
       return bridge.create_Result_void_(__exceptionPtr)
     }
   }
-  
+
   @inline(__always)
-  public final func setInterval(id: Double, interval: Double, callback: bridge.Func_void_double) -> bridge.Result_void_ {
+  public final func setInterval(id: Double, interval: Double) -> bridge.Result_void_ {
     do {
-      try self.__implementation.setInterval(id: id, interval: interval, callback: { () -> (Double) -> Void in
-        let __wrappedFunction = bridge.wrap_Func_void_double(callback)
-        return { (__id: Double) -> Void in
-          __wrappedFunction.call(__id)
-        }
-      }())
+      try self.__implementation.setInterval(id: id, interval: interval)
       return bridge.create_Result_void_()
     } catch (let __error) {
       let __exceptionPtr = __error.toCpp()
       return bridge.create_Result_void_(__exceptionPtr)
     }
   }
-  
+
   @inline(__always)
   public final func clearInterval(id: Double) -> bridge.Result_void_ {
     do {
@@ -177,7 +167,25 @@ open class HybridNitroBackgroundTimerSpec_cxx {
       return bridge.create_Result_void_(__exceptionPtr)
     }
   }
-  
+
+  @inline(__always)
+  public final func drainFiredTimers() -> bridge.Result_std__vector_FiredTimerEvent__ {
+    do {
+      let __result = try self.__implementation.drainFiredTimers()
+      let __resultCpp = { () -> bridge.std__vector_FiredTimerEvent_ in
+        var __vector = bridge.create_std__vector_FiredTimerEvent_(__result.count)
+        for __item in __result {
+          __vector.push_back(__item)
+        }
+        return __vector
+      }()
+      return bridge.create_Result_std__vector_FiredTimerEvent__(__resultCpp)
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_std__vector_FiredTimerEvent__(__exceptionPtr)
+    }
+  }
+
   @inline(__always)
   public final func startBackgroundMode() -> bridge.Result_void_ {
     do {
@@ -188,7 +196,7 @@ open class HybridNitroBackgroundTimerSpec_cxx {
       return bridge.create_Result_void_(__exceptionPtr)
     }
   }
-  
+
   @inline(__always)
   public final func stopBackgroundMode() -> bridge.Result_void_ {
     do {
@@ -199,7 +207,7 @@ open class HybridNitroBackgroundTimerSpec_cxx {
       return bridge.create_Result_void_(__exceptionPtr)
     }
   }
-  
+
   @inline(__always)
   public final func configure(configJson: std.string) -> bridge.Result_void_ {
     do {
@@ -210,7 +218,7 @@ open class HybridNitroBackgroundTimerSpec_cxx {
       return bridge.create_Result_void_(__exceptionPtr)
     }
   }
-  
+
   @inline(__always)
   public final func disableForegroundService() -> bridge.Result_void_ {
     do {

@@ -3,7 +3,7 @@ PODS:
   - hermes-engine (250829098.0.9):
     - hermes-engine/Pre-built (= 250829098.0.9)
   - hermes-engine/Pre-built (250829098.0.9)
-  - NitroBackgroundTimer (0.1.0):
+  - NitroBackgroundTimer (0.3.1):
     - hermes-engine
     - NitroModules
     - RCTRequired
@@ -2140,7 +2140,7 @@ EXTERNAL SOURCES:
 SPEC CHECKSUMS:
   FBLazyVector: e97c19a5a442429d1988f182a1940fb08df514da
   hermes-engine: 55d4d00da075c17ee8c718e54a8062301e6f5581
-  NitroBackgroundTimer: 479549531be0d110b140cab7e3bc192f7722f5b5
+  NitroBackgroundTimer: 74b8b0f40683da1bab415853236a6a98f5453050
   NitroModules: f45159491c5a0e7161685a301b1c6c11440b3ab1
   RCTDeprecation: af44b104091a34482596cd9bd7e8d90c4e9b4bd7
   RCTRequired: bb77b070f75f53398ce43c0aaaa58337cebe2bf6

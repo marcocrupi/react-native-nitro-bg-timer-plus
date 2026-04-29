@@ -14,14 +14,6 @@
 
 namespace margelo::nitro::backgroundtimer::bridge::swift {
 
-  // pragma MARK: std::function<void(double /* id */)>
-  Func_void_double create_Func_void_double(void* NON_NULL swiftClosureWrapper) noexcept {
-    auto swiftClosure = NitroBackgroundTimer::Func_void_double::fromUnsafe(swiftClosureWrapper);
-    return [swiftClosure = std::move(swiftClosure)](double id) mutable -> void {
-      swiftClosure.call(id);
-    };
-  }
-  
   // pragma MARK: std::shared_ptr<HybridNitroBackgroundTimerSpec>
   std::shared_ptr<HybridNitroBackgroundTimerSpec> create_std__shared_ptr_HybridNitroBackgroundTimerSpec_(void* NON_NULL swiftUnsafePointer) noexcept {
     NitroBackgroundTimer::HybridNitroBackgroundTimerSpec_cxx swiftPart = NitroBackgroundTimer::HybridNitroBackgroundTimerSpec_cxx::fromUnsafe(swiftUnsafePointer);

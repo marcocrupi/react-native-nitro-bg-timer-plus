@@ -15,11 +15,17 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
   private var didEnterBackgroundObserver: NSObjectProtocol?
   private var timeoutTimers: [Int: Timer] = [:]
   private var intervalTimers: [Int: Timer] = [:]
+  private let firedTimerQueueLock = NSLock()
+  private var firedTimerQueue: [FiredTimerEvent] = []
+  private var pendingIntervalEventIds = Set<Int>()
+  private var nextFiredTimerSequence: Double = 1
 
   // Mutated and read exclusively from the main queue to avoid cross-thread races.
   private var isDisposed: Bool = false
 
   private static let logTag = "[NitroBgTimer]"
+  private static let timersAvailableNotificationName = Notification.Name("NitroBackgroundTimerTimersAvailableNotification")
+  private static let maxFiredTimerQueueSize = 1024
 
   override init() {
     super.init()
@@ -139,11 +145,86 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
     intervalTimers.values.forEach { $0.invalidate() }
     timeoutTimers.removeAll()
     intervalTimers.removeAll()
+    firedTimerQueueLock.lock()
+    firedTimerQueue.removeAll()
+    pendingIntervalEventIds.removeAll()
+    firedTimerQueueLock.unlock()
     releaseBackgroundTask()
   }
 
+  // MARK: - Fired timer queue
+  private func postTimersAvailableSignal(queueSize: Int) {
+    NotificationCenter.default.post(
+      name: Self.timersAvailableNotificationName,
+      object: nil,
+      userInfo: ["count": queueSize]
+    )
+  }
+
+  private func removeQueuedTimerEvents(id: Int, type: FiredTimerType) {
+    firedTimerQueueLock.lock()
+    firedTimerQueue.removeAll { event in
+      Int(event.id) == id && event.type == type
+    }
+    if type == .interval {
+      pendingIntervalEventIds.remove(id)
+    }
+    firedTimerQueueLock.unlock()
+  }
+
+  private func enqueueFiredTimer(id: Int, type: FiredTimerType) {
+    var queueSize: Int?
+
+    firedTimerQueueLock.lock()
+
+    if type == .interval && pendingIntervalEventIds.contains(id) {
+      firedTimerQueueLock.unlock()
+      return
+    }
+
+    if firedTimerQueue.count >= Self.maxFiredTimerQueueSize {
+      if let dropIndex = firedTimerQueue.firstIndex(where: { $0.type == .interval }) {
+        let dropped = firedTimerQueue.remove(at: dropIndex)
+        pendingIntervalEventIds.remove(Int(dropped.id))
+        logWarn("Fired timer queue reached cap; dropped a pending interval event")
+      } else {
+        firedTimerQueueLock.unlock()
+        logWarn("Fired timer queue reached cap with only timeouts pending; dropping timer id=\(id)")
+        return
+      }
+    }
+
+    firedTimerQueue.append(
+      FiredTimerEvent(
+        id: Double(id),
+        type: type,
+        sequence: nextFiredTimerSequence
+      )
+    )
+    nextFiredTimerSequence += 1
+
+    if type == .interval {
+      pendingIntervalEventIds.insert(id)
+    }
+    queueSize = firedTimerQueue.count
+    firedTimerQueueLock.unlock()
+
+    if let queueSize = queueSize {
+      postTimersAvailableSignal(queueSize: queueSize)
+    }
+  }
+
+  func drainFiredTimers() -> [FiredTimerEvent] {
+    firedTimerQueueLock.lock()
+    let events = firedTimerQueue
+    firedTimerQueue.removeAll()
+    pendingIntervalEventIds.removeAll()
+    firedTimerQueueLock.unlock()
+    return events
+  }
+
   // MARK: - Timeout
-  func setTimeout(id: Double, duration: Double, callback: @escaping (Double) -> Void) {
+  func setTimeout(id: Double, duration: Double) {
     let intId = Int(id)
 
     DispatchQueue.main.async { [weak self] in
@@ -170,10 +251,7 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
           self.releaseBackgroundTaskIfNeeded()
         }
 
-        // Cleanup is hardened for the normal Swift timer path above. This does
-        // not catch C++/JSI exceptions crossing Nitro's generated `noexcept`
-        // callback boundary.
-        callback(id)
+        self.enqueueFiredTimer(id: intId, type: .timeout)
       }
       RunLoop.main.add(timer, forMode: .common)
 
@@ -193,11 +271,12 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
         self.timeoutTimers.removeValue(forKey: intId)
         self.releaseBackgroundTaskIfNeeded()
       }
+      self.removeQueuedTimerEvents(id: intId, type: .timeout)
     }
   }
 
   // MARK: - Interval
-  func setInterval(id: Double, interval: Double, callback: @escaping (Double) -> Void) {
+  func setInterval(id: Double, interval: Double) {
     let intId = Int(id)
 
     DispatchQueue.main.async { [weak self] in
@@ -219,10 +298,7 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
         // If the interval has been cleared while the fire was pending, bail out.
         guard self.intervalTimers[intId] != nil else { return }
 
-        // See the setTimeout callback-invocation comment for the rationale on
-        // why this call is not wrapped in a try/catch (Swift-side asymmetry
-        // with Android, deferred to a future Obj-C++ exception barrier).
-        callback(id)
+        self.enqueueFiredTimer(id: intId, type: .interval)
       }
       RunLoop.main.add(timer, forMode: .common)
 
@@ -242,6 +318,7 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
         self.intervalTimers.removeValue(forKey: intId)
         self.releaseBackgroundTaskIfNeeded()
       }
+      self.removeQueuedTimerEvents(id: intId, type: .interval)
     }
   }
 

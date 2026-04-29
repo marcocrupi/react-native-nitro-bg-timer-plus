@@ -1,15 +1,102 @@
+import {
+  DeviceEventEmitter,
+  NativeEventEmitter,
+  NativeModules,
+  Platform,
+} from 'react-native'
 import { NitroModules } from 'react-native-nitro-modules'
-import type { NitroBackgroundTimer as NitroBackgroundTimerSpec } from './specs/NitroBackgroundTimer.nitro'
+import {
+  FiredTimerType,
+  type FiredTimerEvent,
+  type NitroBackgroundTimer as NitroBackgroundTimerSpec,
+} from './specs/NitroBackgroundTimer.nitro'
 
 export const NitroBackgroundTimer =
   NitroModules.createHybridObject<NitroBackgroundTimerSpec>(
     'NitroBackgroundTimer'
   )
+
+const TIMERS_AVAILABLE_EVENT = 'NitroBackgroundTimerTimersAvailable'
+
+type TimerEventSubscription = {
+  remove(): void
+}
+
 let nextId = 1
 const timeoutCallbacks = new Map<number, () => void>()
 const intervalCallbacks = new Map<number, () => void>()
 
 let isDisposed = false
+let isDraining = false
+let shouldDrainAgain = false
+
+const timerEventEmitter =
+  Platform.OS === 'ios' && NativeModules.NitroBackgroundTimerEventEmitter
+    ? new NativeEventEmitter(NativeModules.NitroBackgroundTimerEventEmitter)
+    : DeviceEventEmitter
+
+let timerEventSubscription: TimerEventSubscription | undefined =
+  timerEventEmitter.addListener(TIMERS_AVAILABLE_EVENT, () => {
+    drainFiredTimers()
+  })
+
+function handleFiredTimer(event: FiredTimerEvent): unknown {
+  if (event.type === FiredTimerType.Timeout) {
+    const callback = timeoutCallbacks.get(event.id)
+    try {
+      callback?.()
+    } catch (error) {
+      return error
+    } finally {
+      timeoutCallbacks.delete(event.id)
+    }
+    return undefined
+  }
+
+  if (event.type === FiredTimerType.Interval) {
+    const callback = intervalCallbacks.get(event.id)
+    if (!callback) return undefined
+
+    try {
+      callback()
+    } catch (error) {
+      return error
+    }
+  }
+
+  return undefined
+}
+
+function drainFiredTimers(): void {
+  if (isDisposed) return
+  if (isDraining) {
+    shouldDrainAgain = true
+    return
+  }
+
+  isDraining = true
+  let firstError: unknown
+
+  try {
+    do {
+      shouldDrainAgain = false
+      const events = NitroBackgroundTimer.drainFiredTimers()
+
+      for (const event of events) {
+        const error = handleFiredTimer(event)
+        if (firstError === undefined && error !== undefined) {
+          firstError = error
+        }
+      }
+    } while (shouldDrainAgain)
+  } finally {
+    isDraining = false
+  }
+
+  if (firstError !== undefined) {
+    throw firstError
+  }
+}
 
 /**
  * Configuration for the Android foreground service notification used when
@@ -66,13 +153,7 @@ export const BackgroundTimer = {
     }
     const id = nextId++
     timeoutCallbacks.set(id, callback)
-    NitroBackgroundTimer.setTimeout(id, duration, () => {
-      try {
-        timeoutCallbacks.get(id)?.()
-      } finally {
-        timeoutCallbacks.delete(id)
-      }
-    })
+    NitroBackgroundTimer.setTimeout(id, duration)
     return id
   },
 
@@ -104,9 +185,7 @@ export const BackgroundTimer = {
     }
     const id = nextId++
     intervalCallbacks.set(id, callback)
-    NitroBackgroundTimer.setInterval(id, interval, () => {
-      intervalCallbacks.get(id)?.()
-    })
+    NitroBackgroundTimer.setInterval(id, interval)
     return id
   },
 
@@ -136,6 +215,8 @@ export const BackgroundTimer = {
     isDisposed = true
     timeoutCallbacks.clear()
     intervalCallbacks.clear()
+    timerEventSubscription?.remove()
+    timerEventSubscription = undefined
     NitroBackgroundTimer.dispose()
   },
 
@@ -222,3 +303,5 @@ export const BackgroundTimer = {
     NitroBackgroundTimer.disableForegroundService()
   },
 }
+
+drainFiredTimers()
