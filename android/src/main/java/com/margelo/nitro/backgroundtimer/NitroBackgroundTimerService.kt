@@ -47,13 +47,6 @@ class NitroBackgroundTimerService : Service() {
 
     val ownerId = intent?.getLongExtra(EXTRA_OWNER_ID, NO_OWNER_ID) ?: NO_OWNER_ID
     val requestId = intent?.getLongExtra(EXTRA_REQUEST_ID, NO_REQUEST_ID) ?: NO_REQUEST_ID
-    if (ownerId == NO_OWNER_ID || requestId == NO_REQUEST_ID) {
-      Log.w(TAG, "Service started without owner/request id, stopping")
-      stopSelf(startId)
-      return START_NOT_STICKY
-    }
-    currentOwnerId = ownerId
-    currentRequestId = requestId
 
     val config = NotificationConfig(
       title = intent?.getStringExtra(EXTRA_CONFIG_TITLE),
@@ -77,19 +70,40 @@ class NitroBackgroundTimerService : Service() {
       } else {
         startForeground(NOTIFICATION_ID, notification)
       }
-      val accepted = NitroBackgroundTimer.notifyForegroundServiceStarted(ownerId, requestId)
-      if (!accepted) {
-        Log.w(TAG, "Foreground service request is stale or owner is gone, stopping")
-        stopSelf(startId)
-      }
     } catch (e: Exception) {
       // On API 31+ the system can refuse the start with
       // ForegroundServiceStartNotAllowedException (e.g. background-start
       // restriction, missing POST_NOTIFICATIONS on API 34+). We log and
       // bail — the wake-lock-only fallback remains in effect for timers.
       Log.w(TAG, "startForeground failed, service will stop", e)
-      NitroBackgroundTimer.notifyForegroundServiceStartFailed(ownerId, requestId)
+      if (ownerId != NO_OWNER_ID && requestId != NO_REQUEST_ID) {
+        NitroBackgroundTimer.notifyForegroundServiceStartFailed(ownerId, requestId)
+      }
       stopSelf(startId)
+      return START_NOT_STICKY
+    }
+
+    if (ownerId == NO_OWNER_ID || requestId == NO_REQUEST_ID) {
+      Log.w(TAG, "Service promoted without owner/request id, stopping")
+      stopSelf(startId)
+      return START_NOT_STICKY
+    }
+
+    currentOwnerId = ownerId
+    currentRequestId = requestId
+
+    when (NitroBackgroundTimer.notifyForegroundServiceStarted(ownerId, requestId)) {
+      ForegroundServiceStartResult.ACTIVE -> {
+        Log.i(TAG, "Service running in foreground")
+      }
+      ForegroundServiceStartResult.STOP_AFTER_START -> {
+        Log.i(TAG, "Service promoted then stopping due to pending stop")
+        stopSelf(startId)
+      }
+      ForegroundServiceStartResult.REJECTED -> {
+        Log.w(TAG, "Foreground service request is stale or owner is gone, stopping")
+        stopSelf(startId)
+      }
     }
 
     // Do not auto-restart — NitroBackgroundTimer owns the lifecycle and will

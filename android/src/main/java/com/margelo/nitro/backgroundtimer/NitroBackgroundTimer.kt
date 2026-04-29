@@ -19,6 +19,12 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
+internal enum class ForegroundServiceStartResult {
+  ACTIVE,
+  STOP_AFTER_START,
+  REJECTED
+}
+
 @DoNotStrip
 class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventListener {
   // Captured at construction time. Must be a non-null `ReactApplicationContext`
@@ -118,6 +124,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   private enum class ForegroundServiceState {
     STOPPED,
     STARTING,
+    STARTING_PENDING_STOP,
     ACTIVE
   }
 
@@ -246,7 +253,9 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
    * `bg_non_interactive` cgroup.
    *
    * Idempotent: returns immediately if the service is already starting or
-   * active. Safe to call from any thread.
+   * active. If a start is pending-stop and new timer demand arrives, the
+   * pending stop is superseded by a fresh request.
+   * Safe to call from any thread.
    *
    * On failure (e.g. Android 12+ background-start restriction), logs a
    * warning and leaves the foreground service state STOPPED, so timers
@@ -256,15 +265,24 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     if (isDisposed.get()) return
     if (isForegroundServiceDisabled.get()) return
     val requestId = synchronized(foregroundServiceLock) {
-      if (isDisposed.get() ||
-        isForegroundServiceDisabled.get() ||
-        foregroundServiceState != ForegroundServiceState.STOPPED
-      ) {
+      if (isDisposed.get() || isForegroundServiceDisabled.get()) {
         null
       } else {
-        foregroundServiceRequestId += 1
-        foregroundServiceState = ForegroundServiceState.STARTING
-        foregroundServiceRequestId
+        when (foregroundServiceState) {
+          ForegroundServiceState.STARTING,
+          ForegroundServiceState.ACTIVE -> null
+          ForegroundServiceState.STOPPED -> {
+            foregroundServiceRequestId += 1
+            foregroundServiceState = ForegroundServiceState.STARTING
+            foregroundServiceRequestId
+          }
+          ForegroundServiceState.STARTING_PENDING_STOP -> {
+            foregroundServiceRequestId += 1
+            foregroundServiceState = ForegroundServiceState.STARTING
+            Log.i(TAG, "Foreground service pending stop superseded by new demand")
+            foregroundServiceRequestId
+          }
+        }
       }
     } ?: return
     val intent = Intent(reactContext, NitroBackgroundTimerService::class.java).apply {
@@ -294,7 +312,8 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       Log.w(TAG, "Failed to start foreground service, falling back to wake lock only", e)
       synchronized(foregroundServiceLock) {
         if (foregroundServiceRequestId == requestId &&
-          foregroundServiceState == ForegroundServiceState.STARTING
+          (foregroundServiceState == ForegroundServiceState.STARTING ||
+            foregroundServiceState == ForegroundServiceState.STARTING_PENDING_STOP)
         ) {
           foregroundServiceState = ForegroundServiceState.STOPPED
         }
@@ -304,12 +323,19 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
 
   private fun stopForegroundServiceInternal() {
     val shouldStop = synchronized(foregroundServiceLock) {
-      if (foregroundServiceState == ForegroundServiceState.STOPPED) {
-        false
-      } else {
-        foregroundServiceRequestId += 1
-        foregroundServiceState = ForegroundServiceState.STOPPED
-        true
+      when (foregroundServiceState) {
+        ForegroundServiceState.STOPPED -> false
+        ForegroundServiceState.STARTING -> {
+          foregroundServiceState = ForegroundServiceState.STARTING_PENDING_STOP
+          Log.i(TAG, "Foreground service stop requested while starting; deferring until service start")
+          false
+        }
+        ForegroundServiceState.STARTING_PENDING_STOP -> false
+        ForegroundServiceState.ACTIVE -> {
+          foregroundServiceRequestId += 1
+          foregroundServiceState = ForegroundServiceState.STOPPED
+          true
+        }
       }
     }
     if (!shouldStop) return
@@ -327,27 +353,36 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       foregroundServiceState != ForegroundServiceState.STOPPED
     }
 
-  private fun handleForegroundServiceStarted(requestId: Long): Boolean {
+  private fun handleForegroundServiceStarted(requestId: Long): ForegroundServiceStartResult {
     var didTransition = false
-    val accepted = synchronized(foregroundServiceLock) {
+    var didPromoteThenStop = false
+    val result = synchronized(foregroundServiceLock) {
       if (isDisposed.get() || foregroundServiceRequestId != requestId) {
-        false
+        ForegroundServiceStartResult.REJECTED
       } else {
         when (foregroundServiceState) {
           ForegroundServiceState.STARTING -> {
             foregroundServiceState = ForegroundServiceState.ACTIVE
             didTransition = true
-            true
+            ForegroundServiceStartResult.ACTIVE
           }
-          ForegroundServiceState.ACTIVE -> true
-          ForegroundServiceState.STOPPED -> false
+          ForegroundServiceState.STARTING_PENDING_STOP -> {
+            foregroundServiceState = ForegroundServiceState.STOPPED
+            didPromoteThenStop = true
+            ForegroundServiceStartResult.STOP_AFTER_START
+          }
+          ForegroundServiceState.ACTIVE -> ForegroundServiceStartResult.ACTIVE
+          ForegroundServiceState.STOPPED -> ForegroundServiceStartResult.REJECTED
         }
       }
     }
     if (didTransition) {
       Log.i(TAG, "Foreground service active")
     }
-    return accepted
+    if (didPromoteThenStop) {
+      Log.i(TAG, "Foreground service promoted then stopping due to pending stop")
+    }
+    return result
   }
 
   private fun handleForegroundServiceStartFailed(requestId: Long) {
@@ -399,7 +434,8 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
    *
    * Idempotent via the foreground service state lock inside
    * `startForegroundServiceInternal`: if the service is already up or a start
-   * request is in flight, this is a no-op.
+   * request is in flight, this is a no-op; if that start was pending-stop, new
+   * timer demand supersedes it with a fresh request.
    *
    * Note on explicit vs implicit mode: this method intentionally does NOT
    * short-circuit on `isExplicitBackgroundModeRequested`. A previous design
@@ -416,7 +452,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     // — just with ~10% drift in background instead of foreground-priority
     // accuracy. See `disableForegroundService()` Kdoc.
     if (isForegroundServiceDisabled.get()) return
-    if (isForegroundServiceStartingOrActive()) return
     startForegroundServiceInternal()
   }
 
@@ -946,10 +981,14 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
       return block(owner)
     }
 
-    internal fun notifyForegroundServiceStarted(ownerId: Long, requestId: Long): Boolean =
+    internal fun notifyForegroundServiceStarted(ownerId: Long, requestId: Long): ForegroundServiceStartResult {
+      var result = ForegroundServiceStartResult.REJECTED
       notifyForegroundServiceOwner(ownerId) { owner ->
-        owner.handleForegroundServiceStarted(requestId)
+        result = owner.handleForegroundServiceStarted(requestId)
+        true
       }
+      return result
+    }
 
     internal fun notifyForegroundServiceStartFailed(ownerId: Long, requestId: Long) {
       notifyForegroundServiceOwner(ownerId) { owner ->
