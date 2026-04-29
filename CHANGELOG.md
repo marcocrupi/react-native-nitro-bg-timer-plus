@@ -9,9 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added iOS lifecycle handling that re-acquires a `UIApplication` background task on subsequent background entries while timers are still active.
+- Added manual testing checklist coverage for Android foreground-service fallback, pending timer configuration gates, callback failure paths, and iOS background-task expiration/re-entry scenarios.
+
 ### Changed
 
+- Tightened Android `configure()` and `disableForegroundService()` gating so calls are blocked once timers are accepted, pending, or active.
+- Clarified README and TESTING documentation around Android foreground-service fallback, iOS best-effort background execution, callback error handling, and OS-imposed limits.
+
 ### Fixed
+
+- Fixed an Android lifecycle race where `setTimeout()` / `setInterval()` could schedule native work after `dispose()` / `onHostDestroy()`.
+- Fixed stale Android foreground-service owner state when the service failed during `startForeground()` or was destroyed.
+- Fixed an Android `configure()` race where configuration could change after timers were accepted but before worker-thread materialization.
+- Hardened Android timer callback handling by logging and containing recoverable `Throwable`s while rethrowing fatal JVM errors.
+- Fixed JS timeout callback cleanup so `timeoutCallbacks` is cleared in a `finally` path when the user callback throws.
+- Fixed iOS background-task expiration handling so stale expiration handlers cannot end newer background tasks.
+- Fixed iOS best-effort background-task re-entry handling when timers are still active.
+- Fixed iOS one-shot timeout cleanup in the Swift path using `defer` / guards so timeout state is cleaned even when callback handling exits abnormally.
 
 ### Removed
 
