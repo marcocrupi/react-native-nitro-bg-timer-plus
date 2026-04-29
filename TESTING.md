@@ -162,11 +162,12 @@ foreground service active, the drift must be near zero.
       `adb shell pm revoke com.nitrobgtimerexample android.permission.POST_NOTIFICATIONS`
 - [ ] Relaunch the example app, press "Start" on Background Test
 - [ ] Verify the app does not crash
-- [ ] Verify that a `Foreground service started` line still appears in
-      logcat but the notification does not appear in the shade
-- [ ] On API 34+, expect the system to terminate the service within
-      ~10 seconds; a `Foreground service stopped` or service death line
-      should follow — this is documented as a known limitation, not a bug
+- [ ] Verify either the foreground service starts with the notification hidden
+      or `startForeground()` fails and the library logs a wake-lock-only
+      fallback
+- [ ] On API 34+, if the service cannot stay promoted, expect a
+      `Foreground service stopped`, service death, or fallback log line — this
+      is documented as a known limitation, not a bug
 
 ### A15 — Long background run does not ANR (B11 regression gate)
 
@@ -196,6 +197,49 @@ Failure mode if regressed: the app would crash with `Short FGS ANR'ed`
 followed by `ANR in com.nitrobgtimerexample` in logcat, and the example
 app would disappear from the recents.
 
+### A16 — Foreground service failure falls back cleanly
+
+This is partly a technical/instrumented scenario because Android does not
+offer a stable manual switch for every foreground-service failure mode.
+
+- [ ] Build a temporary consumer/app variant that removes
+      `NitroBackgroundTimerService` from the merged manifest but does **not**
+      call `BackgroundTimer.disableForegroundService()`
+- [ ] Start a timer — verify the app does not crash
+- [ ] Verify logcat contains a foreground-service start failure and
+      wake-lock-only fallback message
+- [ ] Verify the timer still fires, with the expected wake-lock-only timing
+      caveat
+- [ ] Clear the timer, then start another timer — verify the previous failed
+      start state does not suppress a future foreground-service start attempt
+- [ ] In a normal manifest build, start explicit background mode, then stop the
+      service from adb or an instrumented hook; verify `Service onDestroy` /
+      `Foreground service destroyed` is logged and a later timer can request
+      the service again
+
+### A17 — `configure()` is blocked immediately after timer acceptance
+
+Use a temporary dev button/test harness or an instrumented test if the example
+app does not expose direct calls in this order.
+
+- [ ] Call `BackgroundTimer.setTimeout(() => {}, 30000)`
+- [ ] Immediately call `BackgroundTimer.configure({ notification: { title: 'Late' } })`
+- [ ] Verify `configure()` throws an `Error` before the native timer has fired
+- [ ] Repeat with `BackgroundTimer.setInterval(() => {}, 30000)`
+- [ ] Clear the timer and call `configure()` again — verify it succeeds after
+      no timer is accepted, pending, or active
+
+### A18 — Callback failure policy (technical/instrumented)
+
+- [ ] Schedule a timeout whose callback throws a normal JS `Error`
+- [ ] Verify Android logs the recoverable callback failure and native cleanup
+      still removes the timeout
+- [ ] Schedule an interval whose callback throws a normal JS `Error`
+- [ ] Verify Android logs the recoverable failure and the interval can continue
+      until explicitly cleared
+- [ ] Verify fatal JVM errors are not swallowed by the callback guard
+      (instrumented/native-only; do not simulate this in the example app)
+
 ## iOS tests
 
 ### I1 — Basic timer functionality
@@ -206,8 +250,9 @@ app would disappear from the recents.
 
 - [ ] Start a 25-second `setTimeout`, immediately background the app
 - [ ] After 25s, verify the callback fired
-- [ ] Note: iOS grants ~30s of background execution without explicit
-      background modes
+- [ ] Note: iOS typically grants only limited background execution time
+      without explicit background modes; this is not an infinite background
+      guarantee
 
 ### I3 — Dispose lifecycle
 
@@ -227,19 +272,57 @@ app would disappear from the recents.
 - [ ] Verify `[NitroBgTimer] warn: Background task expiration handler fired`
       appears in Xcode console
 
-### I6 — Stress test
+### I6 — Expiration, foreground, second background reacquire
+
+- [ ] Start a long-running `setInterval`
+- [ ] Background the app and wait for the background task expiration log
+- [ ] Return the app to foreground
+- [ ] Background the app again while the interval is still active
+- [ ] Verify the app does not crash or hit a watchdog termination
+- [ ] In a debug build, verify the reacquire path logs that the app entered
+      background with active timers and no background task
+      (`didEnterBackground` observer path)
+- [ ] Call `clearInterval` or `dispose()` and verify the background task is
+      released / no further interval callbacks fire
+
+### I7 — Timeout cleanup after clear/dispose
+
+- [ ] Start a `setTimeout` long enough to clear manually
+- [ ] Immediately background the app, then call `clearTimeout` before it fires
+- [ ] Verify the callback never fires
+- [ ] Verify the background task is released if no timers remain
+- [ ] Repeat with `BackgroundTimer.dispose()` instead of `clearTimeout`
+- [ ] Verify dispose prevents late callback delivery and releases the
+      background task
+
+### I8 — Callback exception boundary limitation
+
+The iOS Swift timeout cleanup hardening is not a universal C++/JSI
+exception barrier. A real barrier would need to live near the generated
+Nitro `noexcept` callback boundary.
+
+- [ ] Treat user-callback exception behavior on iOS as a technical/native
+      boundary test, not as a manual app checklist item
+- [ ] Verify timeout cleanup behavior with normal clear/dispose paths instead
+      of relying on thrown JS errors as a guaranteed recoverable path
+
+### I9 — Stress test
 
 - [ ] Same as A8 (adapted for iOS)
 
 ## Cross-platform regression tests
 
-### X1 — Long-running interval drift
+### X1 — Long-running interval drift / platform limits
 
-- [ ] Start `setInterval` with 1000 ms
-- [ ] Let it run 10 minutes
-- [ ] Verify no drift > 100 ms per tick
-- [ ] Android: verify wake lock held throughout (via `dumpsys power`)
-- [ ] Call `clearInterval`, verify wake lock / background task released
+- [ ] Android: start explicit background mode, start `setInterval` with
+      1000 ms, background the app for 10 minutes, and verify near-zero drift
+      while the foreground service notification remains active
+- [ ] Android: verify wake lock held throughout (via `dumpsys power`) and
+      released after `clearInterval`
+- [ ] iOS: do **not** treat 10 minutes of continuous background execution as a
+      required pass condition. Use I5/I6 to validate the limited
+      `beginBackgroundTask` window, expiration handling, best-effort reacquire,
+      and cleanup behavior
 
 ### X2 — clearTimeout race
 
@@ -260,5 +343,5 @@ Before tagging a release, the maintainer must:
 - [ ] Execute the full Android checklist on a physical device
 - [ ] Execute the full iOS checklist on a physical device
 - [ ] Verify all JS unit tests pass (`yarn test`)
-- [ ] Verify `yarn typecheck` and `yarn lint` are clean
+- [ ] Verify `yarn typecheck` and `yarn lint-ci` are clean
 - [ ] Document any skipped tests with reason in the release notes
