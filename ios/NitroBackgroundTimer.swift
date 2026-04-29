@@ -163,21 +163,17 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
       let timer = Timer(timeInterval: duration / 1000.0, repeats: false) { [weak self] _ in
         guard let self = self else { return }
+        guard !self.isDisposed, self.timeoutTimers[intId] != nil else { return }
 
-        // Note on callback exception handling (asymmetric with Android):
-        // The Android implementation wraps `callback(id)` in a try/catch to log
-        // and swallow exceptions thrown by the user callback. The Swift side
-        // cannot easily do the same because `callback` is a non-throwing
-        // `(Double) -> Void` and Swift does not support catching C++/Obj-C
-        // exceptions without an Obj-C++ bridge helper. We rely on Nitro's
-        // `AsyncJSCallback` dispatcher to catch JS-level exceptions at the
-        // bridge boundary (the callback is dispatched async via CallInvoker to
-        // the JS thread). Tracked as a future improvement: add an explicit
-        // Obj-C++ exception barrier for stricter parity with Android.
+        defer {
+          self.timeoutTimers.removeValue(forKey: intId)
+          self.releaseBackgroundTaskIfNeeded()
+        }
+
+        // Cleanup is hardened for the normal Swift timer path above. This does
+        // not catch C++/JSI exceptions crossing Nitro's generated `noexcept`
+        // callback boundary.
         callback(id)
-
-        self.timeoutTimers.removeValue(forKey: intId)
-        self.releaseBackgroundTaskIfNeeded()
       }
       RunLoop.main.add(timer, forMode: .common)
 
