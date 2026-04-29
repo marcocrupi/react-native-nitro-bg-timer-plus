@@ -236,12 +236,34 @@ yarn ui-smoke:ios
 bash scripts/ui-smoke-ios.sh --simulator <udid>
 ```
 
+iOS UI smoke with Maestro is simulator-first. The flow is foreground-only and
+presses app UI controls, so a booted simulator is the recommended target for
+the automated UI button smoke.
+
 iOS physical device:
 
 ```sh
 bash scripts/ui-smoke-ios.sh --device <devicectl-id>
 bash scripts/ui-smoke-ios.sh --device <devicectl-id> --xcodebuild-device-id <xcodebuild-id>
+bash scripts/ui-smoke-ios.sh \
+  --device C274F5E5-B73D-556F-9589-E384F79EF805 \
+  --xcodebuild-device-id 00008140-00195819267B801C \
+  --maestro-device-id 00008140-00195819267B801C \
+  --run-id ios-ui-device-001 \
+  --flow main
 ```
+
+Maestro on a physical iPhone is best-effort and experimental because it
+requires Maestro's iOS driver setup and local signing. Physical device runs may
+need three separate ids:
+
+- `--device` for `devicectl`
+- `--xcodebuild-device-id` for `xcodebuild`
+- `--maestro-device-id` for Maestro
+
+If Maestro physical-device execution fails during driver setup, do not treat
+that alone as a library failure. XCUITest is the recommended follow-up for
+robust iOS physical-device automation.
 
 `Disable FGS` is intentionally outside the main flow because it is not
 reversible in the same app process. Use the `fgs-optout` flow as a fresh,

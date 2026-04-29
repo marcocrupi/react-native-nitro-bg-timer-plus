@@ -12,6 +12,7 @@ MODE="simulator"
 SIMULATOR="booted"
 DEVICE=""
 XCODEBUILD_DEVICE_ID=""
+MAESTRO_DEVICE_ID=""
 RUN_ID=""
 SKIP_BUILD=0
 SKIP_INSTALL=0
@@ -30,13 +31,15 @@ Usage: bash scripts/ui-smoke-ios.sh [options]
 
 Modes:
   Simulator: bash scripts/ui-smoke-ios.sh [--simulator [udid]]
-  Device:    bash scripts/ui-smoke-ios.sh --device <devicectl-id>
+  Device:    bash scripts/ui-smoke-ios.sh --device <devicectl-id> [--xcodebuild-device-id <id>] [--maestro-device-id <id>]
 
 Options:
   --simulator [udid]       Use a booted simulator. Defaults to "booted".
   --device <id>            Use a physical device via xcrun devicectl.
   --xcodebuild-device-id <id>
                            xcodebuild destination id for the same physical device.
+  --maestro-device-id <id>
+                           Maestro device id for the same physical device.
   --run-id <id>            UI smoke run id, matching [A-Za-z0-9._-]{1,80}.
   --timeout <sec>          Marker wait timeout after Maestro finishes. Default: 90.
   --flow <name>            main or fgs-optout. Default: main.
@@ -46,6 +49,11 @@ Options:
   --bundle-id <id>         App bundle id.
   --metro-port <port>      Metro port for the preflight check. Default: 8081.
   -h, --help               Show this help.
+
+Notes:
+  On physical iOS devices, devicectl, xcodebuild and Maestro may expose
+  different device identifiers. Use --device for devicectl,
+  --xcodebuild-device-id for xcodebuild, and --maestro-device-id for Maestro.
 
 Prerequisites:
   - Maestro is installed: https://maestro.mobile.dev/
@@ -140,6 +148,11 @@ while [[ $# -gt 0 ]]; do
     --xcodebuild-device-id)
       require_option_value "$1" "${2:-}"
       XCODEBUILD_DEVICE_ID="$2"
+      shift 2
+      ;;
+    --maestro-device-id)
+      require_option_value "$1" "${2:-}"
+      MAESTRO_DEVICE_ID="$2"
       shift 2
       ;;
     --run-id)
@@ -303,10 +316,12 @@ build_simulator_app() {
 
 build_device_app() {
   local build_log
+  local xcodebuild_device_id
   build_log="$(mktemp -t nitro-bg-ui-smoke-ios-build-device.XXXXXX.log)"
+  xcodebuild_device_id="$XCODEBUILD_DEVICE_ID"
 
-  if [[ -z "$XCODEBUILD_DEVICE_ID" ]]; then
-    XCODEBUILD_DEVICE_ID="$DEVICE"
+  if [[ -z "$xcodebuild_device_id" ]]; then
+    xcodebuild_device_id="$DEVICE"
   fi
 
   run_logged "Building iOS device app into DerivedData: ${DERIVED_DATA_PATH}" "$build_log" \
@@ -314,7 +329,7 @@ build_device_app() {
       -workspace "$WORKSPACE" \
       -scheme "$SCHEME" \
       -configuration "$CONFIGURATION" \
-      -destination "platform=iOS,id=${XCODEBUILD_DEVICE_ID}" \
+      -destination "platform=iOS,id=${xcodebuild_device_id}" \
       -derivedDataPath "$DERIVED_DATA_PATH" \
       build
 
@@ -379,10 +394,20 @@ open_smoke_url() {
 
 run_maestro_flow() {
   local status
+  local maestro_device_id
   local maestro_args=(test)
 
   if [[ "$MODE" == "device" ]]; then
-    maestro_args+=(--device "$DEVICE")
+    if [[ -n "$MAESTRO_DEVICE_ID" ]]; then
+      maestro_device_id="$MAESTRO_DEVICE_ID"
+    elif [[ -n "$XCODEBUILD_DEVICE_ID" ]]; then
+      maestro_device_id="$XCODEBUILD_DEVICE_ID"
+    else
+      maestro_device_id="$DEVICE"
+      echo "Warning: Using --device as Maestro device id. On physical iOS devices Maestro may require the Xcode/Apple UDID; pass --maestro-device-id if needed." >&2
+    fi
+
+    maestro_args+=(--device "$maestro_device_id")
   elif [[ "$SIMULATOR" != "booted" ]]; then
     maestro_args+=(--device "$SIMULATOR")
   fi
