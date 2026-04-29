@@ -119,6 +119,10 @@ if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || (( TIMEOUT_SECONDS <= 0 )); then
   die 2 "Invalid --timeout '${TIMEOUT_SECONDS}'. Use a positive integer number of seconds."
 fi
 
+if [[ -z "$PACKAGE_NAME" ]]; then
+  die 2 "Android package id is empty."
+fi
+
 if [[ -z "$RUN_ID" ]]; then
   RUN_ID="android-ui-$(date +%s)-$$"
 fi
@@ -203,7 +207,12 @@ sleep 0.5
   "$PACKAGE_NAME" >/dev/null
 
 set +e
-APP_ID="$PACKAGE_NAME" SMOKE_URL="$SMOKE_URL" maestro test --device "$DEVICE" "$FLOW_FILE" >"$MAESTRO_LOG_FILE" 2>&1
+echo "Maestro APP_ID: ${PACKAGE_NAME}"
+maestro test \
+  --device "$DEVICE" \
+  -e "APP_ID=${PACKAGE_NAME}" \
+  -e "SMOKE_URL=${SMOKE_URL}" \
+  "$FLOW_FILE" >"$MAESTRO_LOG_FILE" 2>&1
 MAESTRO_STATUS=$?
 set -e
 

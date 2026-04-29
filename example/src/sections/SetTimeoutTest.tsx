@@ -12,6 +12,9 @@ import {
 
 type Status = 'idle' | 'pending' | 'fired' | 'cancelled'
 
+const UI_SMOKE_FIRE_TIMEOUT_MS = 300
+const UI_SMOKE_CANCEL_TIMEOUT_MS = 1500
+
 export function SetTimeoutTest() {
   const [duration, setDuration] = useState('5000')
   const [status, setStatus] = useState<Status>('idle')
@@ -38,7 +41,14 @@ export function SetTimeoutTest() {
     }
 
     const ms = parseInt(duration, 10) || 5000
-    const smokeMs = scheduleToken.active ? Math.min(ms, 300) : ms
+    const smokeMs = scheduleToken.active
+      ? Math.min(
+          ms,
+          status === 'fired'
+            ? UI_SMOKE_CANCEL_TIMEOUT_MS
+            : UI_SMOKE_FIRE_TIMEOUT_MS
+        )
+      : ms
     const now = new Date().toLocaleTimeString()
     setScheduledAt(now)
     setFiredAt(null)
@@ -68,7 +78,7 @@ export function SetTimeoutTest() {
         scheduleTokenRef.current = null
       }
     }, smokeMs)
-  }, [duration, addLog])
+  }, [duration, status, addLog])
 
   const cancel = useCallback(() => {
     const cancelToken = startUiSmokeAction('set-timeout', 'cancel', addLog)

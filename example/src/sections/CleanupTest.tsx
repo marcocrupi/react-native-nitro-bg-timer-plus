@@ -54,6 +54,10 @@ export function CleanupTest() {
   const cleanupTickCount = localLogs.filter((entry) =>
     entry.msg.startsWith('Timer ')
   ).length
+  const cleanupTickStateId =
+    cleanupTickCount > 0
+      ? 'ui-smoke-cleanup-tick-observed'
+      : 'ui-smoke-cleanup-waiting'
   const localLogIdRef = useRef(0)
   const { addLog } = useLog()
   const scrollRef = useRef<ScrollView>(null)
@@ -146,8 +150,8 @@ export function CleanupTest() {
         ref={scrollRef}
         style={styles.logBox}
         nestedScrollEnabled
-        testID={`ui-smoke-cleanup-ticks-${cleanupTickCount}`}
-        accessibilityLabel={`ui-smoke-cleanup-ticks-${cleanupTickCount}`}
+        testID={cleanupTickStateId}
+        accessibilityLabel={cleanupTickStateId}
         onContentSizeChange={() =>
           scrollRef.current?.scrollToEnd({ animated: false })
         }

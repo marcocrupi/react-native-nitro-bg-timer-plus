@@ -20,7 +20,7 @@ DERIVED_DATA_PATH=""
 DERIVED_DATA_PROVIDED=0
 METRO_PORT="${RCT_METRO_PORT:-8081}"
 SMOKE_RUN_ID_PATTERN='^[A-Za-z0-9._-]{1,80}$'
-RUNTIME_ERROR_PATTERN='NativeEventEmitter|RCTEventEmitter|RedBox|ReactNativeJS[[:space:]:]+Error|SIGABRT|std::terminate|Fatal error|RCTFatal|NSException|Terminating app'
+RUNTIME_ERROR_PATTERN='NativeEventEmitter|RCTEventEmitter|RedBox|ReactNativeJS[[:space:]:]+Error|SIGABRT|std::terminate|Fatal error|RCTFatal|NS[A-Za-z]+Exception|uncaught exception|Terminating app due to'
 
 LOG_FILE=""
 LOG_PID=""
@@ -222,6 +222,10 @@ if ! [[ "$METRO_PORT" =~ ^[0-9]+$ ]] || (( METRO_PORT <= 0 )); then
   die 2 "Invalid --metro-port '${METRO_PORT}'. Use a positive integer port."
 fi
 
+if [[ -z "$BUNDLE_ID" ]]; then
+  die 2 "App bundle id is empty."
+fi
+
 if [[ -z "$RUN_ID" ]]; then
   RUN_ID="ios-ui-$(date +%s)-$$"
 fi
@@ -355,7 +359,7 @@ install_device_app() {
 start_simulator_log_capture() {
   local predicate
   LOG_FILE="$(mktemp -t nitro-bg-ui-smoke-ios-simulator.XXXXXX.log)"
-  predicate="process == \"${PROCESS_NAME}\" OR eventMessage CONTAINS \"${RUN_ID}\" OR eventMessage CONTAINS \"NitroBgUiSmoke\" OR eventMessage CONTAINS \"NitroBgSmoke\" OR eventMessage CONTAINS \"RedBox\" OR eventMessage CONTAINS \"ReactNativeJS\" OR eventMessage CONTAINS \"Fatal error\""
+  predicate="process == \"${PROCESS_NAME}\" OR eventMessage CONTAINS \"${PROCESS_NAME}\" OR eventMessage CONTAINS \"${BUNDLE_ID}\" OR eventMessage CONTAINS \"${RUN_ID}\" OR eventMessage CONTAINS \"NitroBgUiSmoke\" OR eventMessage CONTAINS \"NitroBgSmoke\""
 
   xcrun simctl spawn "$SIMULATOR" log stream \
     --style compact \
@@ -412,10 +416,15 @@ run_maestro_flow() {
     maestro_args+=(--device "$SIMULATOR")
   fi
 
-  maestro_args+=("$FLOW_FILE")
+  maestro_args+=(
+    -e "APP_ID=${BUNDLE_ID}"
+    -e "SMOKE_URL=${SMOKE_URL}"
+    "$FLOW_FILE"
+  )
 
   set +e
-  APP_ID="$BUNDLE_ID" SMOKE_URL="$SMOKE_URL" maestro "${maestro_args[@]}" >"$MAESTRO_LOG_FILE" 2>&1
+  echo "Maestro APP_ID: ${BUNDLE_ID}"
+  maestro "${maestro_args[@]}" >"$MAESTRO_LOG_FILE" 2>&1
   status=$?
   set -e
 

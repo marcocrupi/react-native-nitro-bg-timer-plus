@@ -16,10 +16,6 @@ appId: "${APP_ID}"
     timeout: 5000
 - tapOn:
     id: ui-smoke-set-timeout-schedule
-- extendedWaitUntil:
-    visible:
-      id: ui-smoke-set-timeout-status-pending
-    timeout: 5000
 - tapOn:
     id: ui-smoke-set-timeout-cancel
 - extendedWaitUntil:
@@ -45,6 +41,12 @@ appId: "${APP_ID}"
     timeout: 10000
 - tapOn:
     id: ui-smoke-background-js-comparison
+- scrollUntilVisible:
+    element:
+      id: ui-smoke-background-configure-notification
+    direction: DOWN
+    centerElement: true
+    timeout: 10000
 - tapOn:
     id: ui-smoke-background-configure-notification
 - tapOn:
@@ -83,7 +85,7 @@ appId: "${APP_ID}"
     id: ui-smoke-cleanup-mount
 - extendedWaitUntil:
     visible:
-      id: ui-smoke-cleanup-ticks-1
+      id: ui-smoke-cleanup-tick-observed
     timeout: 6000
 - tapOn:
     id: ui-smoke-cleanup-unmount
