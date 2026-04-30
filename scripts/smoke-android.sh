@@ -7,6 +7,10 @@ BACKGROUND=0
 INSTALL=0
 DEVICE=""
 ADB_BIN="${ADB:-adb}"
+BENIGN_ANDROID_RUNTIME_PATTERN='AndroidRuntime:[[:space:]]+VM exiting with result code 0'
+RUNTIME_ERROR_PATTERN='FATAL EXCEPTION|Fatal signal|Native crash|RedBox|Invariant Violation|ReactNativeJS.*(Error|Exception)|NativeEventEmitter|RCTEventEmitter|ForegroundServiceDidNotStartInTimeException|RemoteServiceException'
+ANDROID_RUNTIME_CRASH_PATTERN='AndroidRuntime: (FATAL EXCEPTION|Process: com\.nitrobgtimerexample|Caused by:|[[:space:]]*at[[:space:]]|.*(Exception|Error))'
+PROCESS_DIED_PATTERN='Process com\.nitrobgtimerexample( | .*)has died'
 
 usage() {
   cat <<'EOF'
@@ -24,6 +28,12 @@ Prerequisites:
   - The example app is installed, unless --install is provided.
   - Metro is running for debug builds.
 EOF
+}
+
+find_runtime_error() {
+  grep -E "${RUNTIME_ERROR_PATTERN}|${ANDROID_RUNTIME_CRASH_PATTERN}|${PROCESS_DIED_PATTERN}" "$LOG_FILE" |
+    grep -Ev "$BENIGN_ANDROID_RUNTIME_PATTERN" |
+    tail -n 1
 }
 
 while [[ $# -gt 0 ]]; do
@@ -122,21 +132,21 @@ deadline=$((SECONDS + TIMEOUT_SECONDS))
 background_sent=0
 
 while (( SECONDS < deadline )); do
-  if grep -F "[NitroBgSmoke] RESULT PASS runId=${RUN_ID}" "$LOG_FILE" >/dev/null; then
-    echo "PASS runId=${RUN_ID}"
-    exit 0
-  fi
-
   if fail_line="$(grep -F "[NitroBgSmoke] RESULT FAIL runId=${RUN_ID}" "$LOG_FILE" | tail -n 1)"; then
     echo "FAIL runId=${RUN_ID}"
     echo "$fail_line"
     exit 1
   fi
 
-  if crash_line="$(grep -E 'FATAL EXCEPTION|AndroidRuntime|ReactNativeJS.*(Error|Exception)|RedBox|Invariant Violation' "$LOG_FILE" | tail -n 1)"; then
+  if crash_line="$(find_runtime_error)"; then
     echo "FAIL runId=${RUN_ID} crash_or_redbox_detected"
     echo "$crash_line"
     exit 1
+  fi
+
+  if grep -F "[NitroBgSmoke] RESULT PASS runId=${RUN_ID}" "$LOG_FILE" >/dev/null; then
+    echo "PASS runId=${RUN_ID}"
+    exit 0
   fi
 
   if [[ "$BACKGROUND" -eq 1 && "$background_sent" -eq 0 ]] &&

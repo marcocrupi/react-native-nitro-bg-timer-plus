@@ -214,6 +214,11 @@ yarn ui-smoke:android
 yarn ui-smoke:ios
 ```
 
+Android UI smoke with Maestro requires Maestro installed and available in
+`PATH`. Runtime Android smoke is validated separately by
+`scripts/smoke-android.sh`; a missing Maestro binary is an environment
+prerequisite failure for UI smoke, not a runtime failure.
+
 Install Maestro from <https://maestro.mobile.dev/> if the scripts exit with:
 
 ```txt
