@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Testing
+
+### Docs
+
+### Removed
+
+### Security
+
+## [0.3.2] - 2026-04-30
+
+### Added
+
 - Added iOS lifecycle handling that re-acquires a `UIApplication` background task on subsequent background entries while timers are still active.
 - Added automated core smoke harness for the Android and iOS example app.
 - Added iOS physical-device smoke validation path.
@@ -41,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validated iOS physical-device core smoke with `RESULT PASS`.
 - Validated Android physical-device core smoke in foreground with `RESULT PASS`.
 - Validated Android physical-device core smoke in background with `RESULT PASS`.
+- Validated Android long-run foreground service manually on Pixel 9 Pro XL API 36 for about 14m46s with screen off, Battery Saver OFF, notification active, wake lock held during run, and clean service/notification/wake-lock cleanup.
 - Validated iOS simulator Maestro UI main flow with `RESULT PASS`.
 - Documented Maestro on physical iPhone as best-effort because of driver and signing limitations.
 - Documented Android real-device UI smoke and real-device `fgs-optout` smoke as not yet validated.
@@ -209,7 +226,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TypeScript API wrapper with callback management
 - Full API documentation and usage examples in README
 
-[Unreleased]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.1.0...v0.2.0
