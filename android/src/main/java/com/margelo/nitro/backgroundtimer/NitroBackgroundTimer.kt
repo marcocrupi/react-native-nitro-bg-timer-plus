@@ -60,6 +60,8 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
   private val intervalRunnables = ConcurrentHashMap<Int, Runnable>()
   private val acceptedTimeoutIds = ConcurrentHashMap<Int, Boolean>()
   private val acceptedIntervalIds = ConcurrentHashMap<Int, Boolean>()
+  private val clearPendingTimeoutIds = ConcurrentHashMap<Int, Boolean>()
+  private val clearPendingIntervalIds = ConcurrentHashMap<Int, Boolean>()
   private val firedTimerQueueLock = Any()
   private val firedTimerQueue = mutableListOf<FiredTimerEvent>()
   private val pendingIntervalEventIds = mutableSetOf<Int>()
@@ -225,6 +227,8 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     intervalRunnables.clear()
     acceptedTimeoutIds.clear()
     acceptedIntervalIds.clear()
+    clearPendingTimeoutIds.clear()
+    clearPendingIntervalIds.clear()
     synchronized(firedTimerQueueLock) {
       firedTimerQueue.clear()
       pendingIntervalEventIds.clear()
@@ -455,11 +459,16 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     startForegroundServiceInternal()
   }
 
+  private fun <T> hasUnclearedTimerState(
+    timerState: ConcurrentHashMap<Int, T>,
+    clearPendingIds: ConcurrentHashMap<Int, Boolean>
+  ): Boolean = timerState.keys.any { !clearPendingIds.containsKey(it) }
+
   private fun hasTimerState(): Boolean =
-    acceptedTimeoutIds.isNotEmpty() ||
-      acceptedIntervalIds.isNotEmpty() ||
-      timeoutRunnables.isNotEmpty() ||
-      intervalRunnables.isNotEmpty()
+    hasUnclearedTimerState(acceptedTimeoutIds, clearPendingTimeoutIds) ||
+      hasUnclearedTimerState(acceptedIntervalIds, clearPendingIntervalIds) ||
+      hasUnclearedTimerState(timeoutRunnables, clearPendingTimeoutIds) ||
+      hasUnclearedTimerState(intervalRunnables, clearPendingIntervalIds)
 
   /**
    * Called after a timer is cleared or fires-and-completes. Stops the
@@ -540,6 +549,38 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         pendingIntervalEventIds.remove(id)
       }
     }
+  }
+
+  private fun markTimeoutClearPending(id: Int) {
+    if (acceptedTimeoutIds.containsKey(id) || timeoutRunnables.containsKey(id)) {
+      clearPendingTimeoutIds[id] = true
+    }
+  }
+
+  private fun markIntervalClearPending(id: Int) {
+    if (acceptedIntervalIds.containsKey(id) || intervalRunnables.containsKey(id)) {
+      clearPendingIntervalIds[id] = true
+    }
+  }
+
+  private fun cleanupTimeoutAfterClear(id: Int) {
+    timeoutRunnables[id]?.let { handler.removeCallbacks(it) }
+    timeoutRunnables.remove(id)
+    acceptedTimeoutIds.remove(id)
+    removeQueuedTimerEvents(id, FiredTimerType.TIMEOUT)
+    clearPendingTimeoutIds.remove(id)
+    releaseWakeLockIfNeeded()
+    maybeStopForegroundServiceAfterClear()
+  }
+
+  private fun cleanupIntervalAfterClear(id: Int) {
+    intervalRunnables[id]?.let { handler.removeCallbacks(it) }
+    intervalRunnables.remove(id)
+    acceptedIntervalIds.remove(id)
+    removeQueuedTimerEvents(id, FiredTimerType.INTERVAL)
+    clearPendingIntervalIds.remove(id)
+    releaseWakeLockIfNeeded()
+    maybeStopForegroundServiceAfterClear()
   }
 
   private fun enqueueFiredTimer(id: Int, type: FiredTimerType) {
@@ -709,6 +750,11 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         if (isDisposed.get()) {
           Log.w(TAG, "setTimeout($id) ignored after dispose")
           acceptedTimeoutIds.remove(intId)
+          clearPendingTimeoutIds.remove(intId)
+          return@synchronized
+        }
+        if (clearPendingTimeoutIds.containsKey(intId)) {
+          cleanupTimeoutAfterClear(intId)
           return@synchronized
         }
         // Safety net: between the JS-thread check above and this worker-side
@@ -719,6 +765,11 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         if (isDisposed.get()) {
           Log.w(TAG, "setTimeout($id) ignored after dispose")
           acceptedTimeoutIds.remove(intId)
+          clearPendingTimeoutIds.remove(intId)
+          return@synchronized
+        }
+        if (clearPendingTimeoutIds.containsKey(intId)) {
+          cleanupTimeoutAfterClear(intId)
           return@synchronized
         }
 
@@ -729,10 +780,15 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         val runnable = Runnable {
           if (isDisposed.get()) return@Runnable
           try {
-            enqueueFiredTimer(intId, FiredTimerType.TIMEOUT)
+            if (clearPendingTimeoutIds.containsKey(intId)) {
+              removeQueuedTimerEvents(intId, FiredTimerType.TIMEOUT)
+            } else {
+              enqueueFiredTimer(intId, FiredTimerType.TIMEOUT)
+            }
           } finally {
             timeoutRunnables.remove(intId)
             acceptedTimeoutIds.remove(intId)
+            clearPendingTimeoutIds.remove(intId)
             releaseWakeLockIfNeeded()
             maybeStopForegroundServiceAfterClear()
           }
@@ -742,6 +798,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         if (!postDelayedToWorker("setTimeout($id)", runnable, duration.toLong())) {
           timeoutRunnables.remove(intId, runnable)
           acceptedTimeoutIds.remove(intId)
+          clearPendingTimeoutIds.remove(intId)
           releaseWakeLockIfNeeded()
           maybeStopForegroundServiceAfterClear()
           return@synchronized
@@ -759,14 +816,10 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
 
   override fun clearTimeout(id: Double) {
     if (isDisposed.get()) return
+    val intId = id.toInt()
+    markTimeoutClearPending(intId)
     handler.post {
-      val intId = id.toInt()
-      timeoutRunnables[intId]?.let { handler.removeCallbacks(it) }
-      timeoutRunnables.remove(intId)
-      acceptedTimeoutIds.remove(intId)
-      removeQueuedTimerEvents(intId, FiredTimerType.TIMEOUT)
-      releaseWakeLockIfNeeded()
-      maybeStopForegroundServiceAfterClear()
+      cleanupTimeoutAfterClear(intId)
     }
   }
 
@@ -783,6 +836,11 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         if (isDisposed.get()) {
           Log.w(TAG, "setInterval($id) ignored after dispose")
           acceptedIntervalIds.remove(intId)
+          clearPendingIntervalIds.remove(intId)
+          return@synchronized
+        }
+        if (clearPendingIntervalIds.containsKey(intId)) {
+          cleanupIntervalAfterClear(intId)
           return@synchronized
         }
         // Safety net: see equivalent comment in setTimeout above.
@@ -790,6 +848,11 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         if (isDisposed.get()) {
           Log.w(TAG, "setInterval($id) ignored after dispose")
           acceptedIntervalIds.remove(intId)
+          clearPendingIntervalIds.remove(intId)
+          return@synchronized
+        }
+        if (clearPendingIntervalIds.containsKey(intId)) {
+          cleanupIntervalAfterClear(intId)
           return@synchronized
         }
 
@@ -799,14 +862,22 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         val runnable = object : Runnable {
           override fun run() {
             if (isDisposed.get()) return
+            if (clearPendingIntervalIds.containsKey(intId)) {
+              cleanupIntervalAfterClear(intId)
+              return
+            }
             enqueueFiredTimer(intId, FiredTimerType.INTERVAL)
             // Only reschedule if this interval is still registered and not disposed.
             // Wake lock stays held across ticks — no "renewal" needed (see acquireWakeLock() Kdoc).
-            if (intervalRunnables.containsKey(intId) && !isDisposed.get()) {
+            if (intervalRunnables.containsKey(intId) &&
+              !clearPendingIntervalIds.containsKey(intId) &&
+              !isDisposed.get()
+            ) {
               val rescheduled = postDelayedToWorker("setInterval($id)", this, interval.toLong())
               if (!rescheduled) {
                 intervalRunnables.remove(intId, this)
                 acceptedIntervalIds.remove(intId)
+                clearPendingIntervalIds.remove(intId)
                 releaseWakeLockIfNeeded()
                 maybeStopForegroundServiceAfterClear()
               }
@@ -818,6 +889,7 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         if (!postDelayedToWorker("setInterval($id)", runnable, interval.toLong())) {
           intervalRunnables.remove(intId, runnable)
           acceptedIntervalIds.remove(intId)
+          clearPendingIntervalIds.remove(intId)
           releaseWakeLockIfNeeded()
           maybeStopForegroundServiceAfterClear()
           return@synchronized
@@ -835,14 +907,10 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
 
   override fun clearInterval(id: Double) {
     if (isDisposed.get()) return
+    val intId = id.toInt()
+    markIntervalClearPending(intId)
     handler.post {
-      val intId = id.toInt()
-      intervalRunnables[intId]?.let { handler.removeCallbacks(it) }
-      intervalRunnables.remove(intId)
-      acceptedIntervalIds.remove(intId)
-      removeQueuedTimerEvents(intId, FiredTimerType.INTERVAL)
-      releaseWakeLockIfNeeded()
-      maybeStopForegroundServiceAfterClear()
+      cleanupIntervalAfterClear(intId)
     }
   }
 

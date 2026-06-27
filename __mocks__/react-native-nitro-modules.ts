@@ -22,6 +22,8 @@ const state = {
   timers: new Map<number, CapturedTimer>(),
   pendingTimers: new Map<number, CapturedTimer>(),
   acceptedTimers: new Map<number, CapturedTimer>(),
+  clearPendingTimeoutIds: new Set<number>(),
+  clearPendingIntervalIds: new Set<number>(),
   inactiveTimerIds: new Set<number>(),
   firedTimerQueue: [] as MockFiredTimerEvent[],
   pendingIntervalEventIds: new Set<number>(),
@@ -31,7 +33,8 @@ const state = {
   lastConfigJson: null as string | null,
 }
 
-const hasAcceptedTimers = () => state.acceptedTimers.size > 0
+const hasAcceptedTimers = () =>
+  Array.from(state.acceptedTimers.values()).some((timer) => !timer.cleared)
 
 const updateImplicitForegroundService = () => {
   if (!state.isExplicitBackgroundModeRequested && !hasAcceptedTimers()) {
@@ -40,34 +43,72 @@ const updateImplicitForegroundService = () => {
 }
 
 const acceptTimer = (timer: CapturedTimer) => {
+  if (timer.type === 'timeout') {
+    state.clearPendingTimeoutIds.delete(timer.id)
+  } else {
+    state.clearPendingIntervalIds.delete(timer.id)
+  }
   state.inactiveTimerIds.delete(timer.id)
   state.acceptedTimers.set(timer.id, timer)
   state.pendingTimers.set(timer.id, timer)
   state.isForegroundServiceActive = true
 }
 
-const clearAcceptedTimer = (id: number) => {
+const markTimerClearPending = (id: number, type: 'timeout' | 'interval') => {
+  const hasTimerState =
+    state.acceptedTimers.has(id) ||
+    state.pendingTimers.has(id) ||
+    state.timers.has(id)
+
+  if (!hasTimerState) return
+
+  if (type === 'timeout') {
+    state.clearPendingTimeoutIds.add(id)
+  } else {
+    state.clearPendingIntervalIds.add(id)
+  }
+}
+
+const cleanupClearedTimer = (id: number, type: 'timeout' | 'interval') => {
+  state.pendingTimers.delete(id)
+  state.timers.delete(id)
+  state.acceptedTimers.delete(id)
+  state.inactiveTimerIds.add(id)
+  if (type === 'timeout') {
+    state.clearPendingTimeoutIds.delete(id)
+  } else {
+    state.clearPendingIntervalIds.delete(id)
+  }
+  updateImplicitForegroundService()
+}
+
+const clearAcceptedTimer = (id: number, type: 'timeout' | 'interval') => {
+  markTimerClearPending(id, type)
   const timer = state.acceptedTimers.get(id)
   if (timer) {
     timer.cleared = true
     state.inactiveTimerIds.add(id)
   }
-  state.pendingTimers.delete(id)
-  state.timers.delete(id)
-  state.acceptedTimers.delete(id)
   removeQueuedTimerEvents(id)
   updateImplicitForegroundService()
 }
 
 const materializeTimer = (id: number) => {
   const activeTimer = state.timers.get(id)
-  if (activeTimer) return activeTimer
+  if (activeTimer) {
+    if (activeTimer.cleared) {
+      cleanupClearedTimer(id, activeTimer.type)
+    }
+    return activeTimer
+  }
 
   const pendingTimer = state.pendingTimers.get(id)
   if (!pendingTimer) return undefined
 
   state.pendingTimers.delete(id)
-  if (!pendingTimer.cleared) {
+  if (pendingTimer.cleared) {
+    cleanupClearedTimer(id, pendingTimer.type)
+  } else {
     state.timers.set(id, pendingTimer)
   }
   return pendingTimer
@@ -121,7 +162,7 @@ const mockNativeTimer = {
     })
   }),
   clearTimeout: jest.fn((id: number) => {
-    clearAcceptedTimer(id)
+    clearAcceptedTimer(id, 'timeout')
   }),
   setInterval: jest.fn((id: number, interval: number) => {
     acceptTimer({
@@ -132,7 +173,7 @@ const mockNativeTimer = {
     })
   }),
   clearInterval: jest.fn((id: number) => {
-    clearAcceptedTimer(id)
+    clearAcceptedTimer(id, 'interval')
   }),
   drainFiredTimers: jest.fn(() => {
     const events = state.firedTimerQueue
@@ -144,6 +185,8 @@ const mockNativeTimer = {
     state.timers.clear()
     state.pendingTimers.clear()
     state.acceptedTimers.clear()
+    state.clearPendingTimeoutIds.clear()
+    state.clearPendingIntervalIds.clear()
     state.inactiveTimerIds.clear()
     state.firedTimerQueue = []
     state.pendingIntervalEventIds.clear()
@@ -225,6 +268,7 @@ export const __mockHelpers = {
         state.timers.delete(id)
         state.pendingTimers.delete(id)
         state.acceptedTimers.delete(id)
+        state.clearPendingTimeoutIds.delete(id)
         state.inactiveTimerIds.add(id)
         updateImplicitForegroundService()
       }
@@ -258,6 +302,8 @@ export const __mockHelpers = {
     state.timers.clear()
     state.pendingTimers.clear()
     state.acceptedTimers.clear()
+    state.clearPendingTimeoutIds.clear()
+    state.clearPendingIntervalIds.clear()
     state.inactiveTimerIds.clear()
     state.firedTimerQueue = []
     state.pendingIntervalEventIds.clear()
@@ -289,13 +335,22 @@ export const __mockHelpers = {
     return state.lastConfigJson
   },
   isTimerAccepted(id: number): boolean {
-    return state.acceptedTimers.has(id)
+    const timer = state.acceptedTimers.get(id)
+    return !!timer && !timer.cleared
   },
   isTimerPending(id: number): boolean {
-    return state.pendingTimers.has(id)
+    const timer = state.pendingTimers.get(id)
+    return !!timer && !timer.cleared
   },
   isTimerActive(id: number): boolean {
-    return state.timers.has(id)
+    const timer = state.timers.get(id)
+    return !!timer && !timer.cleared
+  },
+  isTimerClearPending(id: number): boolean {
+    return (
+      state.clearPendingTimeoutIds.has(id) ||
+      state.clearPendingIntervalIds.has(id)
+    )
   },
   startBackgroundModeCalls(): number {
     return mockNativeTimer.startBackgroundMode.mock.calls.length

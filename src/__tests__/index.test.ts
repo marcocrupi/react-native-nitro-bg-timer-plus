@@ -752,7 +752,7 @@ describe('BackgroundTimer — background mode lifecycle', () => {
     })
   })
 
-  it('configure succeeds after clearTimeout removes an accepted timer', () => {
+  it('configure succeeds immediately after clearTimeout of an accepted timer', () => {
     jest.isolateModules(() => {
       const { BackgroundTimer } = require('../index')
       const {
@@ -764,6 +764,7 @@ describe('BackgroundTimer — background mode lifecycle', () => {
       expect(__mockHelpers.isTimerAccepted(id)).toBe(false)
       expect(__mockHelpers.isTimerPending(id)).toBe(false)
       expect(__mockHelpers.isTimerActive(id)).toBe(false)
+      expect(__mockHelpers.isTimerClearPending(id)).toBe(true)
       expect(() =>
         BackgroundTimer.configure({ notification: { title: 'After clear' } })
       ).not.toThrow()
@@ -771,7 +772,7 @@ describe('BackgroundTimer — background mode lifecycle', () => {
     })
   })
 
-  it('configure succeeds after clearInterval removes an accepted timer', () => {
+  it('configure succeeds immediately after clearInterval of an accepted timer', () => {
     jest.isolateModules(() => {
       const { BackgroundTimer } = require('../index')
       const {
@@ -783,10 +784,61 @@ describe('BackgroundTimer — background mode lifecycle', () => {
       expect(__mockHelpers.isTimerAccepted(id)).toBe(false)
       expect(__mockHelpers.isTimerPending(id)).toBe(false)
       expect(__mockHelpers.isTimerActive(id)).toBe(false)
+      expect(__mockHelpers.isTimerClearPending(id)).toBe(true)
       expect(() =>
         BackgroundTimer.configure({ notification: { title: 'After clear' } })
       ).not.toThrow()
       expect(__mockHelpers.configureCalls()).toBe(1)
+    })
+  })
+
+  it('clear-pending timeout does not become active when native processes it later', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      const cb = jest.fn()
+      const id = BackgroundTimer.setTimeout(cb, 1000)
+      BackgroundTimer.clearTimeout(id)
+
+      expect(__mockHelpers.isTimerClearPending(id)).toBe(true)
+      __mockHelpers.fireTimer(id)
+
+      expect(cb).not.toHaveBeenCalled()
+      expect(__mockHelpers.isTimerClearPending(id)).toBe(false)
+      expect(__mockHelpers.isTimerAccepted(id)).toBe(false)
+      expect(__mockHelpers.isTimerPending(id)).toBe(false)
+      expect(__mockHelpers.isTimerActive(id)).toBe(false)
+      expect(() =>
+        BackgroundTimer.configure({ notification: { title: 'After worker' } })
+      ).not.toThrow()
+    })
+  })
+
+  it('clear-pending interval does not become active when native processes it later', () => {
+    jest.isolateModules(() => {
+      const { BackgroundTimer } = require('../index')
+      const {
+        __mockHelpers,
+      } = require('../../__mocks__/react-native-nitro-modules')
+      __mockHelpers.reset()
+      const cb = jest.fn()
+      const id = BackgroundTimer.setInterval(cb, 1000)
+      BackgroundTimer.clearInterval(id)
+
+      expect(__mockHelpers.isTimerClearPending(id)).toBe(true)
+      __mockHelpers.fireTimer(id)
+
+      expect(cb).not.toHaveBeenCalled()
+      expect(__mockHelpers.isTimerClearPending(id)).toBe(false)
+      expect(__mockHelpers.isTimerAccepted(id)).toBe(false)
+      expect(__mockHelpers.isTimerPending(id)).toBe(false)
+      expect(__mockHelpers.isTimerActive(id)).toBe(false)
+      expect(() =>
+        BackgroundTimer.configure({ notification: { title: 'After worker' } })
+      ).not.toThrow()
     })
   })
 })
