@@ -6,8 +6,8 @@
     "example"
   ],
   "description": "react-native-nitro-bg-timer-plus is a React Native package built with Nitro, forked from react-native-nitro-bg-timer",
-  "main": "lib/index",
-  "module": "lib/index",
+  "main": "lib/commonjs/index.js",
+  "module": "lib/module/index.js",
   "types": "lib/index.d.ts",
   "react-native": "src/index",
   "source": "src/index",
