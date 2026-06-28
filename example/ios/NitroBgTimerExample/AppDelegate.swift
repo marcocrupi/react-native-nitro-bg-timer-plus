@@ -11,12 +11,22 @@ final class NitroBgSmokeLog: NSObject, RCTBridgeModule {
   private static let emptyCString = strdup("")!
   private static let logMethodCString = strdup("log:")!
   private static let consumePendingSmokeUrlMethodCString = strdup("consumePendingSmokeUrl")!
+  private static let iosArchitectureDiagnosticsMethodCString = strdup("iosArchitectureDiagnostics")!
   private static let logMethodInfoPointer: UnsafePointer<RCTMethodInfo> = {
     let pointer = UnsafeMutablePointer<RCTMethodInfo>.allocate(capacity: 1)
     pointer.initialize(to: RCTMethodInfo(
       jsName: emptyCString,
       objcName: logMethodCString,
       isSync: false
+    ))
+    return UnsafePointer(pointer)
+  }()
+  private static let iosArchitectureDiagnosticsMethodInfoPointer: UnsafePointer<RCTMethodInfo> = {
+    let pointer = UnsafeMutablePointer<RCTMethodInfo>.allocate(capacity: 1)
+    pointer.initialize(to: RCTMethodInfo(
+      jsName: emptyCString,
+      objcName: iosArchitectureDiagnosticsMethodCString,
+      isSync: true
     ))
     return UnsafePointer(pointer)
   }()
@@ -58,6 +68,27 @@ final class NitroBgSmokeLog: NSObject, RCTBridgeModule {
   @objc(__rct_export__consumePendingSmokeUrl)
   static func exportConsumePendingSmokeUrlMethod() -> UnsafePointer<RCTMethodInfo> {
     consumePendingSmokeUrlMethodInfoPointer
+  }
+
+  @objc(iosArchitectureDiagnostics)
+  func iosArchitectureDiagnostics() -> NSDictionary {
+    let newArchCompileFlag = Self.isNewArchitectureCompileFlagEnabled()
+    let newArchInfoPlist = Self.isNewArchitectureInfoPlistEnabled()
+    let newArchEnabled = newArchCompileFlag || newArchInfoPlist
+
+    return [
+      "newArch": Self.boolString(newArchEnabled),
+      "newArchCompileFlag": Self.boolString(newArchCompileFlag),
+      "newArchInfoPlist": Self.boolString(newArchInfoPlist),
+      "bridgeless": "non-determinable",
+      "source": "native",
+      "reactNativeFactory": "true",
+    ]
+  }
+
+  @objc(__rct_export__iosArchitectureDiagnostics)
+  static func exportIosArchitectureDiagnosticsMethod() -> UnsafePointer<RCTMethodInfo> {
+    iosArchitectureDiagnosticsMethodInfoPointer
   }
 
   static func storePendingSmokeUrl(_ url: URL) {
@@ -118,6 +149,30 @@ final class NitroBgSmokeLog: NSObject, RCTBridgeModule {
     }
 
     return "[NitroBgSmoke] \(limited.isEmpty ? "empty" : limited)"
+  }
+
+  private static func isNewArchitectureCompileFlagEnabled() -> Bool {
+#if RCT_NEW_ARCH_ENABLED
+    return true
+#else
+    return false
+#endif
+  }
+
+  private static func isNewArchitectureInfoPlistEnabled() -> Bool {
+    if let value = Bundle.main.object(forInfoDictionaryKey: "RCTNewArchEnabled") as? Bool {
+      return value
+    }
+
+    if let value = Bundle.main.object(forInfoDictionaryKey: "RCTNewArchEnabled") as? String {
+      return value.caseInsensitiveCompare("true") == .orderedSame || value == "1"
+    }
+
+    return false
+  }
+
+  private static func boolString(_ value: Bool) -> String {
+    value ? "true" : "false"
   }
 }
 

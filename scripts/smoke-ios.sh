@@ -131,7 +131,19 @@ run_logged() {
 cleanup() {
   if [[ -n "$LOG_PID" ]]; then
     kill "$LOG_PID" >/dev/null 2>&1 || true
+
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      if ! kill -0 "$LOG_PID" >/dev/null 2>&1; then
+        wait "$LOG_PID" >/dev/null 2>&1 || true
+        LOG_PID=""
+        return 0
+      fi
+      sleep 0.1
+    done
+
+    kill -KILL "$LOG_PID" >/dev/null 2>&1 || true
     wait "$LOG_PID" >/dev/null 2>&1 || true
+    LOG_PID=""
   fi
 }
 trap cleanup EXIT
@@ -713,8 +725,9 @@ handle_existing_device_app() {
     local terminate_log
     terminate_log="$(mktemp -t nitro-bg-smoke-ios-terminate-device.XXXXXX.log)"
     run_logged "Terminating existing device app ${BUNDLE_ID} pid=${DEVICE_PROCESS_PID}" "$terminate_log" \
-      xcrun devicectl device process terminate --device "$DEVICE" --pid "$DEVICE_PROCESS_PID"
-    sleep 1
+      xcrun devicectl device process terminate --device "$DEVICE" --pid "$DEVICE_PROCESS_PID" --kill
+
+    wait_for_device_app_exit 5
     return 0
   else
     local status=$?
@@ -722,6 +735,28 @@ handle_existing_device_app() {
       exit "$status"
     fi
   fi
+}
+
+wait_for_device_app_exit() {
+  local max_wait_seconds="$1"
+  local deadline=$((SECONDS + max_wait_seconds))
+  local status
+
+  while (( SECONDS < deadline )); do
+    if find_device_app_process; then
+      sleep 0.5
+      continue
+    fi
+
+    status=$?
+    if [[ "$status" -eq 1 ]]; then
+      return 0
+    fi
+
+    return "$status"
+  done
+
+  die 2 "The example app did not terminate on device '${DEVICE}' after ${max_wait_seconds}s."
 }
 
 print_open_url_instructions() {
@@ -736,6 +771,13 @@ print_open_url_instructions() {
   echo "  [NitroBgSmoke] DEEPLINK_RECEIVED runId=${RUN_ID}"
   echo "  [NitroBgSmoke] RUN_REQUESTED runId=${RUN_ID}"
   echo "  [NitroBgSmoke] START runId=${RUN_ID}"
+  echo "  [NitroBgSmoke] IOS_ARCH runId=${RUN_ID} newArch=<true|false|unknown> bridgeless=<true|false|unknown|non-determinable>"
+  echo "  [NitroBgSmoke] IOS_EVENT_MODULE runId=${RUN_ID} nativeModulePresent=<true|false>"
+  echo "  [NitroBgSmoke] IOS_EVENT_LISTENER runId=${RUN_ID} installed=<true|false>"
+  echo "  [NitroBgSmoke] IOS_TIMER runId=${RUN_ID} marker=ios-timeout-fired"
+  echo "  [NitroBgSmoke] IOS_TIMER runId=${RUN_ID} marker=ios-interval-fired"
+  echo "  [NitroBgSmoke] IOS_EVENT_DELIVERY runId=${RUN_ID} timeoutFired=<true|false> intervalFired=<true|false> status=<ok|fail>"
+  echo "  [NitroBgSmoke] IOS_EVENT_DELIVERY_OK runId=${RUN_ID}"
   echo "  [NitroBgSmoke] RESULT PASS runId=${RUN_ID}"
   echo "  [NitroBgSmoke] RESULT FAIL runId=${RUN_ID} reason=<reason>"
   echo "The smoke is one-shot per app process because it calls BackgroundTimer.dispose(); reload or restart before rerunning."
@@ -790,6 +832,10 @@ start_device_launch_capture() {
     --device "$DEVICE"
     --console
   )
+
+  if [[ "$TERMINATE_EXISTING" -eq 1 ]]; then
+    launch_command+=(--terminate-existing)
+  fi
 
   if [[ "$LAUNCH_STRATEGY" == "payload-at-launch" ]]; then
     launch_command+=(--payload-url "$SMOKE_URL")
@@ -917,6 +963,18 @@ last_smoke_phase() {
     phase="start"
   fi
 
+  if grep -F "[NitroBgSmoke] IOS_ARCH runId=${RUN_ID}" "$LOG_FILE" >/dev/null 2>&1; then
+    phase="ios_arch"
+  fi
+
+  if grep -F "[NitroBgSmoke] IOS_EVENT_MODULE runId=${RUN_ID}" "$LOG_FILE" >/dev/null 2>&1; then
+    phase="ios_event_module"
+  fi
+
+  if grep -F "[NitroBgSmoke] IOS_EVENT_DELIVERY runId=${RUN_ID}" "$LOG_FILE" >/dev/null 2>&1; then
+    phase="ios_event_delivery"
+  fi
+
   if grep -F "[NitroBgSmoke] STEP PASS runId=${RUN_ID}" "$LOG_FILE" >/dev/null 2>&1; then
     phase="step_pass"
   fi
@@ -969,10 +1027,146 @@ print_timeout_diagnostics() {
     start|step_pass|step_fail)
       echo "Smoke started but did not complete." >&2
       ;;
+    ios_arch)
+      echo "iOS architecture marker was captured, but event module diagnostics did not complete." >&2
+      ;;
+    ios_event_module)
+      echo "iOS event module diagnostics were captured, but timer delivery did not complete." >&2
+      ;;
+    ios_event_delivery)
+      echo "iOS event delivery marker was captured, but RESULT PASS/FAIL was not observed." >&2
+      ;;
     result_fail|result_pass)
       echo "Result marker was present but poll_result did not return before timeout." >&2
       ;;
   esac
+}
+
+smoke_marker_line() {
+  local marker="$1"
+
+  if [[ -z "$LOG_FILE" || ! -f "$LOG_FILE" ]]; then
+    return 1
+  fi
+
+  grep -F "$marker" "$LOG_FILE" |
+    grep -F "runId=${RUN_ID}" |
+    tail -n 1
+}
+
+marker_value() {
+  local line="$1"
+  local key="$2"
+  local value
+
+  value="$(
+    printf '%s\n' "$line" |
+      sed -n "s/.*${key}=\([^[:space:]]*\).*/\1/p" |
+      tail -n 1
+  )"
+
+  if [[ -z "$value" ]]; then
+    echo "unknown"
+    return 0
+  fi
+
+  echo "$value"
+}
+
+validate_ios_smoke_markers() {
+  local arch_line
+  local event_module_line
+  local event_listener_line
+  local timeout_line
+  local interval_line
+  local event_delivery_line
+  local event_delivery_ok_line
+  local missing=0
+  local new_arch
+  local bridgeless
+  local event_module_present
+  local event_listener_installed
+  local timeout_fired
+  local interval_fired
+  local delivery_status
+  local event_delivery_ok
+  local event_signal_observed
+  local event_signal_count
+
+  arch_line="$(smoke_marker_line "[NitroBgSmoke] IOS_ARCH" || true)"
+  event_module_line="$(smoke_marker_line "[NitroBgSmoke] IOS_EVENT_MODULE" || true)"
+  event_listener_line="$(smoke_marker_line "[NitroBgSmoke] IOS_EVENT_LISTENER" || true)"
+  timeout_line="$(smoke_marker_line "[NitroBgSmoke] IOS_TIMER runId=${RUN_ID} marker=ios-timeout-fired" || true)"
+  interval_line="$(smoke_marker_line "[NitroBgSmoke] IOS_TIMER runId=${RUN_ID} marker=ios-interval-fired" || true)"
+  event_delivery_line="$(smoke_marker_line "[NitroBgSmoke] IOS_EVENT_DELIVERY runId=${RUN_ID}" || true)"
+  event_delivery_ok_line="$(smoke_marker_line "[NitroBgSmoke] IOS_EVENT_DELIVERY_OK runId=${RUN_ID}" || true)"
+
+  if [[ -z "$arch_line" ]]; then
+    echo "FAIL runId=${RUN_ID} missing_marker=IOS_ARCH"
+    missing=1
+  fi
+  if [[ -z "$event_module_line" ]]; then
+    echo "FAIL runId=${RUN_ID} missing_marker=IOS_EVENT_MODULE"
+    missing=1
+  fi
+  if [[ -z "$event_listener_line" ]]; then
+    echo "FAIL runId=${RUN_ID} missing_marker=IOS_EVENT_LISTENER"
+    missing=1
+  fi
+  if [[ -z "$timeout_line" ]]; then
+    echo "FAIL runId=${RUN_ID} missing_marker=ios-timeout-fired"
+    missing=1
+  fi
+  if [[ -z "$interval_line" ]]; then
+    echo "FAIL runId=${RUN_ID} missing_marker=ios-interval-fired"
+    missing=1
+  fi
+  if [[ -z "$event_delivery_line" ]]; then
+    echo "FAIL runId=${RUN_ID} missing_marker=IOS_EVENT_DELIVERY"
+    missing=1
+  fi
+  if [[ -z "$event_delivery_ok_line" ]]; then
+    echo "FAIL runId=${RUN_ID} missing_marker=IOS_EVENT_DELIVERY_OK"
+    missing=1
+  fi
+
+  if [[ "$missing" -ne 0 ]]; then
+    return 1
+  fi
+
+  new_arch="$(marker_value "$arch_line" "newArch")"
+  bridgeless="$(marker_value "$arch_line" "bridgeless")"
+  event_module_present="$(marker_value "$event_module_line" "nativeModulePresent")"
+  event_listener_installed="$(marker_value "$event_listener_line" "installed")"
+  timeout_fired="$(marker_value "$event_delivery_line" "timeoutFired")"
+  interval_fired="$(marker_value "$event_delivery_line" "intervalFired")"
+  delivery_status="$(marker_value "$event_delivery_line" "status")"
+  event_signal_observed="$(marker_value "$event_delivery_line" "eventSignalObserved")"
+  event_signal_count="$(marker_value "$event_delivery_line" "eventSignalCount")"
+
+  event_delivery_ok="false"
+  if [[ "$timeout_fired" == "true" && "$interval_fired" == "true" && "$delivery_status" == "ok" ]]; then
+    event_delivery_ok="true"
+  fi
+
+  echo "IOS_DIAGNOSTICS runId=${RUN_ID} archMarker=yes newArch=${new_arch} bridgeless=${bridgeless} eventModulePresent=${event_module_present} eventListenerInstalled=${event_listener_installed} timeoutFired=${timeout_fired} intervalFired=${interval_fired} eventSignalObserved=${event_signal_observed} eventSignalCount=${event_signal_count} eventDeliveryOk=${event_delivery_ok}"
+
+  if [[ "$event_module_present" != "true" ]]; then
+    echo "FAIL runId=${RUN_ID} ios_event_module_missing"
+    return 1
+  fi
+
+  if [[ "$event_listener_installed" != "true" ]]; then
+    echo "FAIL runId=${RUN_ID} ios_event_listener_missing"
+    return 1
+  fi
+
+  if [[ "$event_delivery_ok" != "true" ]]; then
+    echo "FAIL runId=${RUN_ID} ios_event_delivery_incomplete"
+    return 1
+  fi
+
+  return 0
 }
 
 poll_result() {
@@ -984,6 +1178,10 @@ poll_result() {
 
   while (( SECONDS < deadline )); do
     if grep -F "[NitroBgSmoke] RESULT PASS runId=${RUN_ID}" "$LOG_FILE" >/dev/null 2>&1; then
+      if ! validate_ios_smoke_markers; then
+        return 1
+      fi
+
       echo "PASS runId=${RUN_ID}"
       return 0
     fi

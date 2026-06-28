@@ -1,4 +1,4 @@
-import { NativeModules } from 'react-native'
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native'
 import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 
 export const SMOKE_TIMEOUT_MS = 30000
@@ -6,6 +6,7 @@ export const SMOKE_TIMEOUT_MS = 30000
 const STEP_TIMEOUT_MS = 5000
 const BACKGROUND_WINDOW_TICKS = 6
 const BACKGROUND_WINDOW_INTERVAL_MS = 500
+const TIMERS_AVAILABLE_EVENT = 'NitroBackgroundTimerTimersAvailable'
 
 export type SmokeResultStatus = 'pass' | 'fail'
 
@@ -44,6 +45,11 @@ type TimerRegistry = {
 
 type NitroBgSmokeLogModule = {
   log?: (message: string) => void
+  iosArchitectureDiagnostics?: () =>
+    | IosNativeArchitectureDiagnostics
+    | Promise<IosNativeArchitectureDiagnostics | null | undefined>
+    | null
+    | undefined
 }
 
 class SmokeStepError extends Error {
@@ -54,6 +60,30 @@ class SmokeStepError extends Error {
     this.name = 'SmokeStepError'
     this.stepName = stepName
   }
+}
+
+type BooleanMarkerValue = 'true' | 'false' | 'unknown'
+type BridgelessMarkerValue = BooleanMarkerValue | 'non-determinable'
+
+type IosNativeArchitectureDiagnostics = {
+  newArch?: unknown
+  newArchCompileFlag?: unknown
+  newArchInfoPlist?: unknown
+  bridgeless?: unknown
+  source?: unknown
+}
+
+type IosBridgelessDiagnostics = {
+  value: BridgelessMarkerValue
+  globalState: 'boolean' | 'missing' | 'non-boolean'
+}
+
+type IosEventDiagnostics = {
+  nativeModulePresent: boolean
+  listenerInstalled: boolean
+  listenerError?: string
+  eventSignalCount: number
+  removeListener: () => void
 }
 
 let activeRun: Promise<SmokeResult> | null = null
@@ -109,6 +139,9 @@ async function runSmoke(
   }
   let intervalIdForClear: number | null = null
   let intervalTicks = 0
+  let iosTimeoutFired = false
+  let iosIntervalFired = false
+  let iosEventDiagnostics: IosEventDiagnostics | undefined
   let disposed = false
   let status: SmokeResultStatus = 'pass'
   let reason: string | undefined
@@ -153,10 +186,35 @@ async function runSmoke(
     }
   }
 
+  iosEventDiagnostics = await prepareIosDiagnostics(options)
+
   try {
+    if (Platform.OS === 'ios') {
+      await runStep('iosEventDiagnostics', () => {
+        if (!iosEventDiagnostics?.nativeModulePresent) {
+          throw new Error('ios_event_module_missing')
+        }
+
+        if (!iosEventDiagnostics.listenerInstalled) {
+          throw new Error(
+            iosEventDiagnostics.listenerError ?? 'ios_event_listener_missing'
+          )
+        }
+      })
+    }
+
     await runStep('setTimeout', () => {
       return new Promise<void>((resolve) => {
-        scheduleBackgroundTimeout(registry, resolve, 100)
+        emitIosTimerMarker(options, 'timeout', 'started')
+        scheduleBackgroundTimeout(
+          registry,
+          () => {
+            iosTimeoutFired = true
+            emitIosTimerMarker(options, 'timeout', 'fired')
+            resolve()
+          },
+          100
+        )
       })
     })
 
@@ -179,16 +237,36 @@ async function runSmoke(
 
     await runStep('setInterval', () => {
       return new Promise<void>((resolve) => {
+        emitIosTimerMarker(options, 'interval', 'started')
         intervalIdForClear = scheduleBackgroundInterval(
           registry,
           () => {
             intervalTicks += 1
+            if (!iosIntervalFired) {
+              iosIntervalFired = true
+              emitIosTimerMarker(options, 'interval', 'fired')
+            }
             if (intervalTicks >= 3) resolve()
           },
           80
         )
       })
     })
+
+    if (Platform.OS === 'ios') {
+      await runStep('iosEventDelivery', () => {
+        emitIosEventDeliveryMarker(
+          options,
+          iosTimeoutFired,
+          iosIntervalFired,
+          iosEventDiagnostics
+        )
+
+        if (!iosTimeoutFired || !iosIntervalFired) {
+          throw new Error('ios_event_delivery_missing_callbacks')
+        }
+      })
+    }
 
     await runStep('clearInterval', async () => {
       if (intervalIdForClear === null) {
@@ -288,6 +366,8 @@ async function runSmoke(
     reason =
       error instanceof SmokeStepError ? error.message : reasonFromError(error)
   } finally {
+    iosEventDiagnostics?.removeListener()
+
     if (!disposed) {
       cleanupTimers(registry)
       try {
@@ -368,6 +448,205 @@ function emitResult(
 
 function emit(options: BackgroundTimerSmokeOptions, message: string): void {
   emitSmokeMarker(message, options.log)
+}
+
+async function prepareIosDiagnostics(
+  options: BackgroundTimerSmokeOptions
+): Promise<IosEventDiagnostics | undefined> {
+  if (Platform.OS !== 'ios') {
+    return undefined
+  }
+
+  await emitIosArchitectureMarker(options)
+  return installIosEventDiagnostics(options)
+}
+
+async function emitIosArchitectureMarker(
+  options: BackgroundTimerSmokeOptions
+): Promise<void> {
+  const nativeDiagnostics = await readIosNativeArchitectureDiagnostics()
+  const bridgelessDiagnostics = readIosBridgelessDiagnostics()
+  const newArch = normalizeBooleanMarkerValue(nativeDiagnostics?.newArch)
+  const newArchCompileFlag = normalizeBooleanMarkerValue(
+    nativeDiagnostics?.newArchCompileFlag
+  )
+  const newArchInfoPlist = normalizeBooleanMarkerValue(
+    nativeDiagnostics?.newArchInfoPlist
+  )
+  const source =
+    typeof nativeDiagnostics?.source === 'string'
+      ? sanitizeSmokeToken(nativeDiagnostics.source)
+      : 'js'
+  const turboModuleProxy = globalPresence('__turboModuleProxy')
+  const nativeFabricUIManager = globalPresence('nativeFabricUIManager')
+
+  emit(
+    options,
+    `[NitroBgSmoke] IOS_ARCH runId=${options.runId} newArch=${newArch} bridgeless=${bridgelessDiagnostics.value} source=${source} newArchCompileFlag=${newArchCompileFlag} newArchInfoPlist=${newArchInfoPlist} rnBridgelessGlobal=${bridgelessDiagnostics.globalState} turboModuleProxy=${turboModuleProxy} nativeFabricUIManager=${nativeFabricUIManager}`
+  )
+}
+
+async function readIosNativeArchitectureDiagnostics(): Promise<
+  IosNativeArchitectureDiagnostics | undefined
+> {
+  try {
+    const smokeLog = NativeModules.NitroBgSmokeLog as
+      | NitroBgSmokeLogModule
+      | undefined
+    const diagnostics = smokeLog?.iosArchitectureDiagnostics?.()
+    const resolvedDiagnostics = await Promise.resolve(diagnostics)
+
+    if (
+      resolvedDiagnostics !== null &&
+      typeof resolvedDiagnostics === 'object'
+    ) {
+      return resolvedDiagnostics
+    }
+  } catch {
+    // The JS marker still emits unknown values when native diagnostics are unavailable.
+  }
+
+  return undefined
+}
+
+function installIosEventDiagnostics(
+  options: BackgroundTimerSmokeOptions
+): IosEventDiagnostics {
+  const diagnostics: IosEventDiagnostics = {
+    nativeModulePresent: false,
+    listenerInstalled: false,
+    eventSignalCount: 0,
+    removeListener: () => {},
+  }
+  const eventModule = NativeModules.NitroBackgroundTimerEventEmitter
+
+  diagnostics.nativeModulePresent = Boolean(eventModule)
+  emit(
+    options,
+    `[NitroBgSmoke] IOS_EVENT_MODULE runId=${options.runId} nativeModulePresent=${diagnostics.nativeModulePresent}`
+  )
+
+  if (!eventModule) {
+    emit(
+      options,
+      `[NitroBgSmoke] IOS_EVENT_LISTENER runId=${options.runId} installed=false reason=module_missing`
+    )
+    return diagnostics
+  }
+
+  try {
+    const eventEmitter = new NativeEventEmitter(eventModule)
+    const subscription = eventEmitter.addListener(TIMERS_AVAILABLE_EVENT, () => {
+      diagnostics.eventSignalCount += 1
+      emit(
+        options,
+        `[NitroBgSmoke] IOS_EVENT_SIGNAL runId=${options.runId} count=${diagnostics.eventSignalCount}`
+      )
+    })
+
+    diagnostics.listenerInstalled = true
+    diagnostics.removeListener = () => {
+      subscription.remove()
+    }
+  } catch (error) {
+    diagnostics.listenerError = reasonFromError(error)
+  }
+
+  const reasonPart = diagnostics.listenerError
+    ? ` reason=${diagnostics.listenerError}`
+    : ''
+  emit(
+    options,
+    `[NitroBgSmoke] IOS_EVENT_LISTENER runId=${options.runId} installed=${diagnostics.listenerInstalled}${reasonPart}`
+  )
+
+  return diagnostics
+}
+
+function emitIosTimerMarker(
+  options: BackgroundTimerSmokeOptions,
+  kind: 'timeout' | 'interval',
+  state: 'started' | 'fired'
+): void {
+  if (Platform.OS !== 'ios') {
+    return
+  }
+
+  emit(
+    options,
+    `[NitroBgSmoke] IOS_TIMER runId=${options.runId} marker=ios-${kind}-${state}`
+  )
+}
+
+function emitIosEventDeliveryMarker(
+  options: BackgroundTimerSmokeOptions,
+  timeoutFired: boolean,
+  intervalFired: boolean,
+  diagnostics?: IosEventDiagnostics
+): void {
+  const eventSignalCount = diagnostics?.eventSignalCount ?? 0
+  const eventDeliveryOk = timeoutFired && intervalFired
+
+  emit(
+    options,
+    `[NitroBgSmoke] IOS_DRAIN runId=${options.runId} drainFiredTimers=indirect evidence=background-timer-callbacks`
+  )
+  emit(
+    options,
+    `[NitroBgSmoke] IOS_EVENT_DELIVERY runId=${options.runId} timeoutFired=${timeoutFired} intervalFired=${intervalFired} eventSignalObserved=${eventSignalCount > 0} eventSignalCount=${eventSignalCount} drainFiredTimers=indirect status=${eventDeliveryOk ? 'ok' : 'fail'}`
+  )
+
+  if (eventDeliveryOk) {
+    emit(
+      options,
+      `[NitroBgSmoke] IOS_EVENT_DELIVERY_OK runId=${options.runId}`
+    )
+  }
+}
+
+function readIosBridgelessDiagnostics(): IosBridgelessDiagnostics {
+  const bridgelessFlag = globalValue('RN$Bridgeless')
+
+  if (typeof bridgelessFlag === 'boolean') {
+    return {
+      value: bridgelessFlag ? 'true' : 'false',
+      globalState: 'boolean',
+    }
+  }
+
+  return {
+    value: 'non-determinable',
+    globalState: bridgelessFlag === undefined ? 'missing' : 'non-boolean',
+  }
+}
+
+function normalizeBooleanMarkerValue(value: unknown): BooleanMarkerValue {
+  if (value === true || value === 'true' || value === 1 || value === '1') {
+    return 'true'
+  }
+
+  if (value === false || value === 'false' || value === 0 || value === '0') {
+    return 'false'
+  }
+
+  return 'unknown'
+}
+
+function globalValue(name: string): unknown {
+  return (globalThis as unknown as Record<string, unknown>)[name]
+}
+
+function globalPresence(name: string): 'present' | 'missing' {
+  return globalValue(name) === undefined ? 'missing' : 'present'
+}
+
+function sanitizeSmokeToken(value: string): string {
+  const sanitized = value
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Za-z0-9_.:/-]/g, '_')
+    .slice(0, 80)
+
+  return sanitized || 'unknown'
 }
 
 function mirrorSmokeMarkerToNative(message: string): void {
