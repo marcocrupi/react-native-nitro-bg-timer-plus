@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added an Android `fgs-optout-deep` UI smoke flow that exercises
+  `disableForegroundService()` followed by a real `BackgroundTimer.setTimeout`,
+  backgrounds the app during the active timer window, and checks
+  foreground-service, notification, wake-lock, crash, and smoke marker evidence.
+- Added iOS smoke diagnostics for New Architecture / Bridgeless event delivery,
+  including runtime architecture markers, NativeEventEmitter module/listener
+  markers, event signal/drain markers, and real `setTimeout` / `setInterval`
+  callback markers.
+
 ### Changed
 
 ### Fixed
@@ -26,6 +35,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
+- Validated the existing Android `fgs-optout` UI smoke flow on Pixel 9 Pro XL,
+  Android 16 / API 36, including the `disableForegroundService()` marker, native
+  opt-out log, no run-scoped `FAIL` marker, and no
+  `com.nitrobgtimerexample` crash.
+- Validated Android `fgs-optout-deep` on Pixel 9 Pro XL, Android 16 / API 36,
+  confirming a timer fired after foreground-service opt-out, no
+  `NitroBackgroundTimerService` was running during the active timer window, no
+  foreground-service notification was observed, no foreground-service
+  start/running logs were observed, and the `NitroBgTimer::WakeLock` was observed
+  held and later released.
+- Validated iOS event delivery on a physical iPhone 16e (`iPhone17,5`) running
+  iOS 26.5 with Xcode 26.5, `newArch=true`, and `bridgeless=true`, confirming
+  NativeEventEmitter module/listener setup, event signal/drain evidence, real
+  timeout and interval callbacks, `IOS_EVENT_DELIVERY_OK`, and `RESULT PASS`.
+- Documented the remaining validation limits: Android `dumpsys` checks are
+  best-effort and version-dependent; Android validation was limited to Pixel 9
+  Pro XL Android 16 / API 36; iOS validation was limited to a foreground smoke on
+  one physical device and does not cover background expiration/re-entry, long
+  background sessions, lock screen behavior, simulator coverage, or broader
+  device/OS matrices.
 - Stabilized the Android UI smoke main harness. The script now opens the smoke
   deep link, waits for `CONTEXT runId=<id> mode=ui` before starting Maestro,
   and the Maestro flow drives the already configured app instead of launching
