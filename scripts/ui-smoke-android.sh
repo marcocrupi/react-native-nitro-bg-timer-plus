@@ -155,6 +155,8 @@ fi
 ADB_CMD=("$ADB_BIN" -s "$DEVICE")
 FLOW_FILE=".maestro/ui-smoke-${FLOW}.yaml"
 SMOKE_URL="nitrobgtimerexample://smoke?runId=${RUN_ID}&mode=ui"
+# These quotes are parsed by the Android shell invoked through adb shell.
+ADB_SHELL_SMOKE_URL="'${SMOKE_URL}'"
 LOG_FILE="$(mktemp -t nitro-bg-ui-smoke-android.XXXXXX.log)"
 MAESTRO_LOG_FILE="$(mktemp -t nitro-bg-ui-smoke-maestro-android.XXXXXX.log)"
 LOG_SINCE="$(date '+%m-%d %H:%M:%S.000')"
@@ -203,7 +205,7 @@ sleep 0.5
 
 "${ADB_CMD[@]}" shell am start -W \
   -a android.intent.action.VIEW \
-  -d "$SMOKE_URL" \
+  -d "$ADB_SHELL_SMOKE_URL" \
   "$PACKAGE_NAME" >/dev/null
 
 set +e
