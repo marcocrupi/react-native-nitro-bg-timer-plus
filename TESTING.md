@@ -14,14 +14,21 @@ cleanup all require manual verification on each platform.
 
 ## Current validation status
 
-- Core smoke iOS physical device: validated with `RESULT PASS`.
-- Core smoke Android physical device foreground: validated with `RESULT PASS`.
-- Core smoke Android physical device background: validated with `RESULT PASS`.
-- UI smoke iOS simulator main flow: validated with `RESULT PASS`.
+- Core smoke iOS physical device: previously validated with `RESULT PASS`; not
+  revalidated in this cycle.
+- Core smoke Android physical device foreground: previously validated with
+  `RESULT PASS`.
+- Core smoke Android physical device background: previously validated with
+  `RESULT PASS`.
+- Android physical-device UI smoke main flow: validated with `RESULT PASS` in
+  this cycle.
+- UI smoke iOS simulator main flow: previously validated with `RESULT PASS`;
+  not revalidated in this cycle.
 - Maestro on physical iPhone: best-effort because local driver setup and
   signing can fail outside the library runtime.
-- Android real-device UI smoke: not yet validated.
-- Real-device `fgs-optout` smoke: not yet validated.
+- Real-device `fgs-optout` smoke: separate flow, not validated in this cycle.
+- Long background/Home behavior, lock-screen behavior, and OEM Android
+  background policy: not validated in this cycle.
 
 ## Automated smoke test
 
@@ -219,6 +226,14 @@ Android UI smoke with Maestro requires Maestro installed and available in
 `scripts/smoke-android.sh`; a missing Maestro binary is an environment
 prerequisite failure for UI smoke, not a runtime failure.
 
+On Android, `scripts/ui-smoke-android.sh` owns launch/setup for the main flow:
+it force-stops the example app before the deep link, opens
+`nitrobgtimerexample://smoke?runId=<id>&mode=ui`, waits for
+`CONTEXT runId=<id> mode=ui`, and then starts Maestro. Maestro drives the
+already configured app and does not run `launchApp` or `openLink` after that
+context. Crash detection is scoped to `com.nitrobgtimerexample`, so Maestro
+driver process failures are not classified as example app crashes.
+
 Install Maestro from <https://maestro.mobile.dev/> if the scripts exit with:
 
 ```txt
@@ -246,7 +261,9 @@ bash scripts/ui-smoke-android.sh --device <serial>
 bash scripts/ui-smoke-android.sh --flow fgs-optout --device <serial>
 ```
 
-Current status: Android physical-device UI smoke has not yet been validated.
+Current status: Android physical-device UI smoke main flow is validated with
+`RESULT PASS`. The `fgs-optout` flow remains separate and is not validated in
+this cycle.
 
 iOS simulator:
 
@@ -295,11 +312,12 @@ bash scripts/ui-smoke-android.sh --flow fgs-optout
 bash scripts/ui-smoke-ios.sh --flow fgs-optout
 ```
 
-Current status: real-device `fgs-optout` smoke has not yet been validated.
+Current status: real-device `fgs-optout` smoke is not validated in this cycle.
 
-The UI button smoke does not validate true background/Home behavior, iOS
-background execution, lock-screen behavior, or OEM Android background policy.
-Those remain manual checks or future native UI automation.
+The UI button smoke does not validate true background/Home behavior, long
+background execution, iOS background execution, lock-screen behavior, or OEM
+Android background policy. Those remain manual checks or future native UI
+automation.
 
 ## Android tests
 
@@ -509,17 +527,21 @@ offer a stable manual switch for every foreground-service failure mode.
       `Foreground service destroyed` is logged and a later timer can request
       the service again
 
-### A17 — `configure()` is blocked immediately after timer acceptance
+### A17 — `configure()` gating around accepted and cleared timers
 
 Use a temporary dev button/test harness or an instrumented test if the example
 app does not expose direct calls in this order.
 
-- [ ] Call `BackgroundTimer.setTimeout(() => {}, 30000)`
+- [ ] Call `const id = BackgroundTimer.setTimeout(() => {}, 30000)`
 - [ ] Immediately call `BackgroundTimer.configure({ notification: { title: 'Late' } })`
 - [ ] Verify `configure()` throws an `Error` before the native timer has fired
-- [ ] Repeat with `BackgroundTimer.setInterval(() => {}, 30000)`
-- [ ] Clear the timer and call `configure()` again — verify it succeeds after
-      no timer is accepted, pending, or active
+- [ ] Call `BackgroundTimer.clearTimeout(id)`, then immediately call
+      `configure()` again — verify it succeeds without waiting for native
+      cleanup to finish
+- [ ] Repeat with `const id = BackgroundTimer.setInterval(() => {}, 30000)`
+- [ ] Call `BackgroundTimer.clearInterval(id)`, then immediately call
+      `configure()` again — verify it succeeds without waiting for native
+      cleanup to finish
 
 ### A18 — JS callback failure policy after callback-free native delivery
 

@@ -13,9 +13,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Corrected package entrypoints so `main` points to the CommonJS build
+  (`lib/commonjs/index.js`), `module` points to the ESM build
+  (`lib/module/index.js`), and `types` remains aligned with the generated
+  declarations (`lib/index.d.ts`).
+- Fixed Android `configure()` false blocking immediately after
+  `clearTimeout()` or `clearInterval()`. Cleared timer IDs are now marked as
+  pending-clear before asynchronous native cleanup finishes, so `configure()`
+  can be called immediately after the clear without a stale active-timer block.
+- Fixed Android UI smoke deep link quoting for `&mode=ui` so Android shell
+  does not interpret `mode=ui` as a separate command.
+
 ### Testing
 
+- Stabilized the Android UI smoke main harness. The script now opens the smoke
+  deep link, waits for `CONTEXT runId=<id> mode=ui` before starting Maestro,
+  and the Maestro flow drives the already configured app instead of launching
+  the app or opening links again after that context.
+- The Android UI smoke script now force-stops the example app only before
+  opening the deep link, giving the run a clean process without interrupting
+  the configured UI smoke context.
+- Scoped Android UI smoke crash detection to `com.nitrobgtimerexample`,
+  avoiding false failures from the `dev.mobile.maestro` process.
+- Added stable UI smoke markers/selectors for `setInterval`, Cleanup, and
+  HookTest, and made the `setTimeout` cancel check less timing-sensitive.
+- These Android UI smoke changes affect the example test harness only; they do
+  not change the public runtime API.
+
 ### Docs
+
+- Updated Android UI smoke documentation to describe the current main-flow
+  launch model, validation status, and residual unvalidated areas.
 
 ### Removed
 

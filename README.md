@@ -28,7 +28,7 @@ mechanisms and remains subject to Android and iOS operating-system limits.
 - 🔔 Customizable persistent notification via `configure()` (title, text, icon, channel)
 - 🔒 Thread-safe by design — all native state serialized on a dedicated worker thread (Android) or main queue (iOS)
 - 🛡️ Graceful fallback if `WAKE_LOCK` permission is missing — no crash, just a warning
-- ✅ 42 unit tests + manual release checklist
+- ✅ 56 unit tests + manual release checklist
 
 ## Requirements
 
@@ -365,6 +365,10 @@ BackgroundTimer.configure({
 or while any timer is accepted, pending, or active. Call it early in your
 app lifecycle (e.g. at startup or right before the user enters the
 critical screen), never mid-session.
+
+After `clearTimeout()` or `clearInterval()` clears the last accepted timer,
+`configure()` can be retried immediately. Android treats IDs already being
+cleared as no longer blocking configuration while native cleanup finishes.
 
 ### Required permissions
 
