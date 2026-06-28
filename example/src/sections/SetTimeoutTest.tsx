@@ -13,7 +13,7 @@ import {
 type Status = 'idle' | 'pending' | 'fired' | 'cancelled'
 
 const UI_SMOKE_FIRE_TIMEOUT_MS = 300
-const UI_SMOKE_CANCEL_TIMEOUT_MS = 1500
+const UI_SMOKE_CANCEL_TIMEOUT_MS = 4500
 
 export function SetTimeoutTest() {
   const [duration, setDuration] = useState('5000')
@@ -151,12 +151,19 @@ export function SetTimeoutTest() {
           <Text style={styles.btnText}>Schedule</Text>
         </Pressable>
         <Pressable
-          style={[styles.btn, styles.btnRed, status !== 'pending' && styles.btnDisabled]}
+          style={[
+            styles.btn,
+            styles.btnRed,
+            status !== 'pending' && styles.btnDisabled,
+          ]}
           onPress={cancel}
           disabled={status !== 'pending'}
+          hitSlop={8}
           testID="ui-smoke-set-timeout-cancel"
           accessibilityLabel="ui-smoke-set-timeout-cancel"
           accessibilityRole="button"
+          accessibilityState={{ disabled: status !== 'pending' }}
+          accessible
         >
           <Text style={styles.btnText}>Cancel</Text>
         </Pressable>
@@ -198,9 +205,11 @@ const styles = StyleSheet.create({
   },
   btn: {
     flex: 1,
+    minHeight: 44,
     paddingVertical: 10,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   btnGreen: { backgroundColor: '#27ae60' },
   btnRed: { backgroundColor: '#e74c3c' },

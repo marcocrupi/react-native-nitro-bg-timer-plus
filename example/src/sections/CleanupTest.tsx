@@ -51,13 +51,7 @@ function TimerChild({
 export function CleanupTest() {
   const [mounted, setMounted] = useState(false)
   const [localLogs, setLocalLogs] = useState<{ id: number; msg: string }[]>([])
-  const cleanupTickCount = localLogs.filter((entry) =>
-    entry.msg.startsWith('Timer ')
-  ).length
-  const cleanupTickStateId =
-    cleanupTickCount > 0
-      ? 'ui-smoke-cleanup-tick-observed'
-      : 'ui-smoke-cleanup-waiting'
+  const [cleanupTickObserved, setCleanupTickObserved] = useState(false)
   const localLogIdRef = useRef(0)
   const { addLog } = useLog()
   const scrollRef = useRef<ScrollView>(null)
@@ -74,6 +68,7 @@ export function CleanupTest() {
       setLocalLogs((prev) => [...prev.slice(-49), { id, msg }])
       addLog(`[Cleanup] ${msg}`)
       if (msg.startsWith('Timer ') && mountTokenRef.current !== null) {
+        setCleanupTickObserved(true)
         passUiSmokeAction(mountTokenRef.current, addLog)
         mountTokenRef.current = null
       }
@@ -115,6 +110,7 @@ export function CleanupTest() {
       unmountVerificationRef.current = null
     }
     mountTokenRef.current = startUiSmokeAction('cleanup', 'mount', addLog)
+    setCleanupTickObserved(false)
     setMounted(true)
   }, [addLog, mounted])
 
@@ -145,13 +141,23 @@ export function CleanupTest() {
           {mounted ? 'Unmount Component' : 'Mount Component'}
         </Text>
       </Pressable>
+      {cleanupTickObserved && (
+        <View
+          style={styles.tickObserved}
+          testID="ui-smoke-cleanup-tick-observed"
+          accessibilityLabel="ui-smoke-cleanup-tick-observed"
+          accessible
+        >
+          <Text style={styles.tickObservedText}>Cleanup tick observed</Text>
+        </View>
+      )}
       {mounted && <TimerChild onLog={handleLog} />}
       <ScrollView
         ref={scrollRef}
         style={styles.logBox}
         nestedScrollEnabled
-        testID={cleanupTickStateId}
-        accessibilityLabel={cleanupTickStateId}
+        testID="ui-smoke-cleanup-log"
+        accessibilityLabel="ui-smoke-cleanup-log"
         onContentSizeChange={() =>
           scrollRef.current?.scrollToEnd({ animated: false })
         }
@@ -186,6 +192,20 @@ const styles = StyleSheet.create({
   btnGreen: { backgroundColor: '#27ae60' },
   btnRed: { backgroundColor: '#e74c3c' },
   btnText: { color: '#fff', fontWeight: '600', fontSize: 14 },
+  tickObserved: {
+    backgroundColor: '#eef7ff',
+    borderColor: '#3498db',
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 10,
+    padding: 8,
+  },
+  tickObservedText: {
+    color: '#1f5f8f',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
   childBox: {
     backgroundColor: '#e8f5e9',
     padding: 10,

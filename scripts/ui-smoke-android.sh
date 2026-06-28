@@ -4,12 +4,14 @@ set -euo pipefail
 PACKAGE_NAME="com.nitrobgtimerexample"
 FLOW="main"
 TIMEOUT_SECONDS=90
+CONTEXT_TIMEOUT_SECONDS=30
 RUN_ID=""
 DEVICE=""
 INSTALL=0
 ADB_BIN="${ADB:-adb}"
 SMOKE_RUN_ID_PATTERN='^[A-Za-z0-9._-]{1,80}$'
-RUNTIME_ERROR_PATTERN='FATAL EXCEPTION|AndroidRuntime|ReactNativeJS.*(Error|Exception)|RedBox|Invariant Violation|SIGABRT'
+APP_RUNTIME_ERROR_PATTERN='FATAL EXCEPTION|ReactNativeJS.*(Error|Exception)|RedBox|Invariant Violation|SIGABRT|Fatal signal'
+APP_PIDS=""
 
 usage() {
   cat <<'EOF'
@@ -170,6 +172,109 @@ cleanup() {
 }
 trap cleanup EXIT
 
+remember_app_pids() {
+  local current_pids=""
+  local pid=""
+
+  current_pids="$("${ADB_CMD[@]}" shell pidof "$PACKAGE_NAME" 2>/dev/null | tr -d '\r' || true)"
+  for pid in $current_pids; do
+    case " ${APP_PIDS} " in
+      *" ${pid} "*)
+        ;;
+      *)
+        APP_PIDS="${APP_PIDS:+${APP_PIDS} }${pid}"
+        ;;
+    esac
+  done
+}
+
+find_app_runtime_error() {
+  local crash_line=""
+
+  if crash_line="$(grep -F "Crash of app ${PACKAGE_NAME}" "$LOG_FILE" | tail -n 1)"; then
+    echo "$crash_line"
+    return 0
+  fi
+
+  if crash_line="$(grep -F "AndroidRuntime" "$LOG_FILE" | grep -F "Process: ${PACKAGE_NAME}" | tail -n 1)"; then
+    echo "$crash_line"
+    return 0
+  fi
+
+  if crash_line="$(grep -F "$PACKAGE_NAME" "$LOG_FILE" | grep -E "$APP_RUNTIME_ERROR_PATTERN" | tail -n 1)"; then
+    echo "$crash_line"
+    return 0
+  fi
+
+  if [[ -n "$APP_PIDS" ]]; then
+    if crash_line="$(awk -v app_pids="$APP_PIDS" -v pattern="$APP_RUNTIME_ERROR_PATTERN" '
+      BEGIN {
+        pid_count = split(app_pids, pids, /[[:space:]]+/)
+        for (i = 1; i <= pid_count; i++) {
+          if (pids[i] != "") {
+            known_pids[pids[i]] = 1
+          }
+        }
+      }
+      ($3 in known_pids) && $0 ~ pattern {
+        last = $0
+      }
+      END {
+        if (last != "") {
+          print last
+          exit 0
+        }
+        exit 1
+      }
+    ' "$LOG_FILE")"; then
+      echo "$crash_line"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+wait_for_ui_smoke_context() {
+  local context_marker="[NitroBgUiSmoke] CONTEXT runId=${RUN_ID} mode=ui"
+  local deadline=$((SECONDS + CONTEXT_TIMEOUT_SECONDS))
+  local context_line=""
+  local fail_line=""
+  local crash_line=""
+
+  echo "Waiting up to ${CONTEXT_TIMEOUT_SECONDS}s for UI smoke context"
+  while (( SECONDS < deadline )); do
+    if [[ -z "$APP_PIDS" ]]; then
+      remember_app_pids
+    fi
+
+    if context_line="$(grep -F "$context_marker" "$LOG_FILE" | tail -n 1)"; then
+      echo "Context ready runId=${RUN_ID}"
+      echo "$context_line"
+      return 0
+    fi
+
+    if fail_line="$(grep -F "[NitroBgUiSmoke] FAIL runId=${RUN_ID}" "$LOG_FILE" | tail -n 1)"; then
+      echo "FAIL runId=${RUN_ID}"
+      echo "$fail_line"
+      exit 1
+    fi
+
+    if crash_line="$(find_app_runtime_error)"; then
+      echo "FAIL runId=${RUN_ID} crash_or_redbox_detected"
+      echo "$crash_line"
+      exit 1
+    fi
+
+    sleep 0.25
+  done
+
+  echo "TIMEOUT runId=${RUN_ID} after ${CONTEXT_TIMEOUT_SECONDS}s waiting for UI smoke context" >&2
+  grep -F "$RUN_ID" "$LOG_FILE" | tail -n 80 >&2 || true
+  echo "Full log: ${LOG_FILE}" >&2
+  exit 124
+}
+
 if [[ ! -f "$FLOW_FILE" ]]; then
   die 2 "Maestro flow not found: ${FLOW_FILE}"
 fi
@@ -203,10 +308,20 @@ echo "Log capture: logcat -> ${LOG_FILE}"
 LOGCAT_PID="$!"
 sleep 0.5
 
+echo "Force-stopping ${PACKAGE_NAME} before opening UI smoke deep link"
+"${ADB_CMD[@]}" shell am force-stop "$PACKAGE_NAME" >/dev/null
+
 "${ADB_CMD[@]}" shell am start -W \
   -a android.intent.action.VIEW \
   -d "$ADB_SHELL_SMOKE_URL" \
   "$PACKAGE_NAME" >/dev/null
+
+remember_app_pids
+if [[ -n "$APP_PIDS" ]]; then
+  echo "App PID(s): ${APP_PIDS}"
+fi
+
+wait_for_ui_smoke_context
 
 set +e
 echo "Maestro APP_ID: ${PACKAGE_NAME}"
@@ -224,6 +339,8 @@ if [[ "$MAESTRO_STATUS" -ne 0 ]]; then
   echo "Maestro log: ${MAESTRO_LOG_FILE}" >&2
   exit 1
 fi
+
+remember_app_pids
 
 expected_markers_main=(
   "section=set-timeout action=schedule"
@@ -266,7 +383,7 @@ while (( SECONDS < deadline )); do
     exit 1
   fi
 
-  if crash_line="$(grep -E "$RUNTIME_ERROR_PATTERN" "$LOG_FILE" | tail -n 1)"; then
+  if crash_line="$(find_app_runtime_error)"; then
     echo "FAIL runId=${RUN_ID} crash_or_redbox_detected"
     echo "$crash_line"
     exit 1

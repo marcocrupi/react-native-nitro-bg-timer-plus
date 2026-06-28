@@ -1,9 +1,5 @@
 appId: "${APP_ID}"
 ---
-- launchApp:
-    clearState: false
-- openLink: "${SMOKE_URL}"
-
 - scrollUntilVisible:
     element:
       id: ui-smoke-background-disable-fgs

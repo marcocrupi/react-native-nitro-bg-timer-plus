@@ -12,16 +12,25 @@ import {
 
 export function HookTest() {
   const [count, setCount] = useState(0)
+  const [hookTickObserved, setHookTickObserved] = useState(false)
+  const [hookRestartTickObserved, setHookRestartTickObserved] = useState(false)
   const countRef = useRef(0)
   const startTokenRef = useRef<UiSmokeActionToken | null>(null)
   const restartTokenRef = useRef<UiSmokeActionToken | null>(null)
   const { addLog } = useLog()
+  const hookTickObservedTestId = hookRestartTickObserved
+    ? 'ui-smoke-hook-restart-tick-observed'
+    : 'ui-smoke-hook-tick-observed'
 
   const { start, stop, restart, isRunning } = useBackgroundTimer(
     () => {
       countRef.current += 1
       const next = countRef.current
       setCount(next)
+      setHookTickObserved(true)
+      if (restartTokenRef.current !== null) {
+        setHookRestartTickObserved(true)
+      }
       addLog(`[Hook] Tick #${next}`)
       if (startTokenRef.current !== null) {
         passUiSmokeAction(startTokenRef.current, addLog)
@@ -38,6 +47,8 @@ export function HookTest() {
 
   const startWithSmoke = () => {
     startTokenRef.current = startUiSmokeAction('hook', 'start', addLog)
+    setHookTickObserved(false)
+    setHookRestartTickObserved(false)
     start()
   }
 
@@ -54,6 +65,8 @@ export function HookTest() {
     startTokenRef.current = null
     countRef.current = 0
     setCount(0)
+    setHookTickObserved(false)
+    setHookRestartTickObserved(false)
     restart()
   }
 
@@ -66,6 +79,16 @@ export function HookTest() {
       >
         {count}
       </Text>
+      {hookTickObserved && (
+        <View
+          style={styles.tickObserved}
+          testID={hookTickObservedTestId}
+          accessibilityLabel={hookTickObservedTestId}
+          accessible
+        >
+          <Text style={styles.tickObservedText}>Hook tick observed</Text>
+        </View>
+      )}
       <View style={styles.statusRow}>
         <View
           style={[
@@ -141,6 +164,20 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 13,
     color: '#666',
+  },
+  tickObserved: {
+    backgroundColor: '#eef7ff',
+    borderColor: '#3498db',
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 10,
+    padding: 8,
+  },
+  tickObservedText: {
+    color: '#1f5f8f',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   row: {
     flexDirection: 'row',

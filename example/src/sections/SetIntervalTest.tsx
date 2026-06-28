@@ -13,6 +13,8 @@ import {
 export function SetIntervalTest() {
   const [seconds, setSeconds] = useState(0)
   const [running, setRunning] = useState(false)
+  const tickedTestId =
+    seconds > 0 ? 'ui-smoke-set-interval-ticked' : undefined
   const intervalRef = useRef<number | null>(null)
   const startTokenRef = useRef<UiSmokeActionToken | null>(null)
   const { addLog } = useLog()
@@ -70,13 +72,18 @@ export function SetIntervalTest() {
 
   return (
     <Section title="2. setInterval Counter">
-      <Text
-        style={styles.counter}
-        testID={`ui-smoke-set-interval-seconds-${seconds}`}
-        accessibilityLabel={`ui-smoke-set-interval-seconds-${seconds}`}
+      <View
+        testID={tickedTestId}
+        accessibilityLabel={tickedTestId}
       >
-        {seconds}s
-      </Text>
+        <Text
+          style={styles.counter}
+          testID={`ui-smoke-set-interval-seconds-${seconds}`}
+          accessibilityLabel={`ui-smoke-set-interval-seconds-${seconds}`}
+        >
+          {seconds}s
+        </Text>
+      </View>
       <View style={styles.row}>
         <Pressable
           style={[styles.btn, styles.btnGreen, running && styles.btnDisabled]}
