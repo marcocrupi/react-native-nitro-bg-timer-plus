@@ -1,0 +1,14 @@
+appId: "${APP_ID}"
+---
+- scrollUntilVisible:
+    element:
+      id: ui-smoke-fgs-optout-deep-run
+    direction: DOWN
+    centerElement: true
+    timeout: 10000
+- tapOn:
+    id: ui-smoke-fgs-optout-deep-run
+- extendedWaitUntil:
+    visible:
+      id: ui-smoke-fgs-optout-timeout-started
+    timeout: 5000

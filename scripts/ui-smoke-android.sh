@@ -12,6 +12,9 @@ ADB_BIN="${ADB:-adb}"
 SMOKE_RUN_ID_PATTERN='^[A-Za-z0-9._-]{1,80}$'
 APP_RUNTIME_ERROR_PATTERN='FATAL EXCEPTION|ReactNativeJS.*(Error|Exception)|RedBox|Invariant Violation|SIGABRT|Fatal signal'
 APP_PIDS=""
+WAKE_LOCK_TAG="NitroBgTimer::WakeLock"
+FGS_SERVICE_CLASS="NitroBackgroundTimerService"
+FGS_LOG_PATTERN='Foreground service start requested|Service onCreate|Service running in foreground'
 
 usage() {
   cat <<'EOF'
@@ -21,7 +24,7 @@ Options:
   --device <serial>     adb device serial. Required when multiple devices are authorized.
   --run-id <id>         UI smoke run id, matching [A-Za-z0-9._-]{1,80}.
   --timeout <sec>       Marker wait timeout after Maestro finishes. Default: 90.
-  --flow <name>         main or fgs-optout. Default: main.
+  --flow <name>         main, fgs-optout, or fgs-optout-deep. Default: main.
   --install             Run yarn example:android before the UI smoke.
   --package-name <id>   Android package id. Default: com.nitrobgtimerexample.
   -h, --help            Show this help.
@@ -31,8 +34,8 @@ Prerequisites:
   - A physical/emulated Android device is connected and authorized.
   - Metro is running for debug builds.
   - The example app is installed, unless --install is provided.
-  - The fgs-optout flow needs a fresh app process. If the app is already
-    running, close it manually or use --install before running that flow.
+  - Opt-out flows run in a fresh app process; this script force-stops the
+    package immediately before opening the UI smoke deep link.
 EOF
 }
 
@@ -110,10 +113,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$FLOW" in
-  main|fgs-optout)
+  main|fgs-optout|fgs-optout-deep)
     ;;
   *)
-    die 2 "Invalid --flow '${FLOW}'. Use main or fgs-optout."
+    die 2 "Invalid --flow '${FLOW}'. Use main, fgs-optout, or fgs-optout-deep."
     ;;
 esac
 
@@ -161,6 +164,7 @@ SMOKE_URL="nitrobgtimerexample://smoke?runId=${RUN_ID}&mode=ui"
 ADB_SHELL_SMOKE_URL="'${SMOKE_URL}'"
 LOG_FILE="$(mktemp -t nitro-bg-ui-smoke-android.XXXXXX.log)"
 MAESTRO_LOG_FILE="$(mktemp -t nitro-bg-ui-smoke-maestro-android.XXXXXX.log)"
+EVIDENCE_DIR=""
 LOG_SINCE="$(date '+%m-%d %H:%M:%S.000')"
 LOGCAT_PID=""
 
@@ -235,6 +239,331 @@ find_app_runtime_error() {
   return 1
 }
 
+find_run_fail_marker() {
+  local fail_line=""
+
+  if fail_line="$(grep -F "[NitroBgUiSmoke] FAIL runId=${RUN_ID}" "$LOG_FILE" | tail -n 1)"; then
+    echo "$fail_line"
+    return 0
+  fi
+
+  return 1
+}
+
+find_fgs_log_line() {
+  local fgs_line=""
+
+  if fgs_line="$(grep -F "NitroBgTimer" "$LOG_FILE" | grep -E "$FGS_LOG_PATTERN" | tail -n 1)"; then
+    echo "$fgs_line"
+    return 0
+  fi
+
+  return 1
+}
+
+check_deep_failure_signals() {
+  local fail_line=""
+  local crash_line=""
+  local fgs_line=""
+
+  if fail_line="$(find_run_fail_marker)"; then
+    echo "FAIL runId=${RUN_ID}"
+    echo "$fail_line"
+    exit 1
+  fi
+
+  if crash_line="$(find_app_runtime_error)"; then
+    echo "FAIL runId=${RUN_ID} crash_or_redbox_detected"
+    echo "$crash_line"
+    exit 1
+  fi
+
+  if fgs_line="$(find_fgs_log_line)"; then
+    echo "FAIL runId=${RUN_ID} foreground_service_log_observed"
+    echo "$fgs_line"
+    exit 1
+  fi
+}
+
+wait_for_ui_smoke_pass() {
+  local marker="$1"
+  local timeout_seconds="$2"
+  local check_fgs_logs="${3:-}"
+  local pass_marker="[NitroBgUiSmoke] PASS runId=${RUN_ID} ${marker}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local fail_line=""
+  local crash_line=""
+
+  while (( SECONDS < deadline )); do
+    if grep -F "$pass_marker" "$LOG_FILE" >/dev/null 2>&1; then
+      echo "Observed PASS ${marker}"
+      return 0
+    fi
+
+    if [[ "$check_fgs_logs" == "check-fgs" ]]; then
+      check_deep_failure_signals
+    else
+      if fail_line="$(find_run_fail_marker)"; then
+        echo "FAIL runId=${RUN_ID}"
+        echo "$fail_line"
+        exit 1
+      fi
+
+      if crash_line="$(find_app_runtime_error)"; then
+        echo "FAIL runId=${RUN_ID} crash_or_redbox_detected"
+        echo "$crash_line"
+        exit 1
+      fi
+    fi
+
+    sleep 0.25
+  done
+
+  echo "TIMEOUT runId=${RUN_ID} after ${timeout_seconds}s waiting for PASS ${marker}" >&2
+  grep -F "$RUN_ID" "$LOG_FILE" | tail -n 80 >&2 || true
+  echo "Full log: ${LOG_FILE}" >&2
+  echo "Maestro log: ${MAESTRO_LOG_FILE}" >&2
+  exit 124
+}
+
+extract_last_log_pid() {
+  local needle="$1"
+
+  awk -v needle="$needle" '
+    index($0, needle) > 0 {
+      pid = $3
+    }
+    END {
+      if (pid != "") {
+        print pid
+        exit 0
+      }
+      exit 1
+    }
+  ' "$LOG_FILE"
+}
+
+assert_deep_log_pid_consistency() {
+  local include_fired="${1:-0}"
+  local base_pid=""
+  local pid=""
+  local needle=""
+  local needles=(
+    "[NitroBgUiSmoke] CONTEXT runId=${RUN_ID} mode=ui"
+    "[NitroBgUiSmoke] PASS runId=${RUN_ID} section=background action=fgs-optout-disable"
+    "[NitroBgUiSmoke] PASS runId=${RUN_ID} section=background action=fgs-optout-timeout-started"
+  )
+
+  if [[ "$include_fired" -eq 1 ]]; then
+    needles+=("[NitroBgUiSmoke] PASS runId=${RUN_ID} section=background action=fgs-optout-timeout-fired")
+  fi
+
+  for needle in "${needles[@]}"; do
+    pid="$(extract_last_log_pid "$needle" 2>/dev/null || true)"
+    if [[ -z "$pid" ]]; then
+      echo "WARN runId=${RUN_ID} marker_pid_unavailable needle=${needle}"
+      continue
+    fi
+
+    if [[ -z "$base_pid" ]]; then
+      base_pid="$pid"
+      continue
+    fi
+
+    if [[ "$pid" != "$base_pid" ]]; then
+      echo "FAIL runId=${RUN_ID} marker_pid_changed expected=${base_pid} actual=${pid}"
+      echo "Needle: ${needle}"
+      exit 1
+    fi
+  done
+
+  if [[ -n "$base_pid" ]]; then
+    echo "Marker PID consistent runId=${RUN_ID} pid=${base_pid}"
+  fi
+}
+
+capture_deep_dumpsys() {
+  local phase="$1"
+
+  if [[ -z "$EVIDENCE_DIR" ]]; then
+    EVIDENCE_DIR="$(mktemp -d -t nitro-bg-ui-smoke-android-evidence.XXXXXX)"
+  fi
+
+  DEEP_POWER_DUMP="${EVIDENCE_DIR}/${RUN_ID}-${phase}-power.txt"
+  DEEP_SERVICE_DUMP="${EVIDENCE_DIR}/${RUN_ID}-${phase}-activity-services.txt"
+  DEEP_NOTIFICATION_DUMP="${EVIDENCE_DIR}/${RUN_ID}-${phase}-notification.txt"
+
+  if ! "${ADB_CMD[@]}" shell dumpsys power >"$DEEP_POWER_DUMP" 2>&1; then
+    echo "FAIL runId=${RUN_ID} dumpsys_power_failed phase=${phase}" >&2
+    cat "$DEEP_POWER_DUMP" >&2 || true
+    exit 1
+  fi
+
+  if ! "${ADB_CMD[@]}" shell dumpsys activity services >"$DEEP_SERVICE_DUMP" 2>&1; then
+    echo "FAIL runId=${RUN_ID} dumpsys_activity_services_failed phase=${phase}" >&2
+    cat "$DEEP_SERVICE_DUMP" >&2 || true
+    exit 1
+  fi
+
+  if ! "${ADB_CMD[@]}" shell dumpsys notification --noredact >"$DEEP_NOTIFICATION_DUMP" 2>&1; then
+    if ! "${ADB_CMD[@]}" shell dumpsys notification >"$DEEP_NOTIFICATION_DUMP" 2>&1; then
+      echo "FAIL runId=${RUN_ID} dumpsys_notification_failed phase=${phase}" >&2
+      cat "$DEEP_NOTIFICATION_DUMP" >&2 || true
+      exit 1
+    fi
+  fi
+
+  echo "Captured dumpsys phase=${phase}"
+  echo "  power: ${DEEP_POWER_DUMP}"
+  echo "  services: ${DEEP_SERVICE_DUMP}"
+  echo "  notification: ${DEEP_NOTIFICATION_DUMP}"
+}
+
+find_service_running_line() {
+  local service_dump="$1"
+  local service_line=""
+
+  if service_line="$(grep -F -m 1 "$FGS_SERVICE_CLASS" "$service_dump")"; then
+    echo "$service_line"
+    return 0
+  fi
+
+  return 1
+}
+
+find_fgs_notification_line() {
+  local notification_dump="$1"
+
+  awk -v pkg="$PACKAGE_NAME" '
+    BEGIN {
+      found = 0
+    }
+    /NotificationRecord/ && index($0, pkg) > 0 {
+      print
+      found = 1
+      exit
+    }
+    index($0, pkg) > 0 && /(FLAG_FOREGROUND_SERVICE|foregroundService|fgService)/ {
+      print
+      found = 1
+      exit
+    }
+    END {
+      if (found) {
+        exit 0
+      }
+      exit 1
+    }
+  ' "$notification_dump"
+}
+
+find_wake_lock_line() {
+  local power_dump="$1"
+
+  awk -v tag="$WAKE_LOCK_TAG" '
+    BEGIN {
+      in_wake_locks = 0
+      found = 0
+    }
+    /^Wake Locks:/ {
+      in_wake_locks = 1
+      next
+    }
+    in_wake_locks && /^[^[:space:]]/ {
+      in_wake_locks = 0
+    }
+    in_wake_locks && index($0, tag) > 0 {
+      print
+      found = 1
+      exit
+    }
+    END {
+      if (found) {
+        exit 0
+      }
+      exit 1
+    }
+  ' "$power_dump"
+}
+
+assert_no_foreground_service_observed() {
+  local phase="$1"
+  local observed_line=""
+
+  if observed_line="$(find_service_running_line "$DEEP_SERVICE_DUMP")"; then
+    echo "FAIL runId=${RUN_ID} service_running phase=${phase}"
+    echo "$observed_line"
+    exit 1
+  fi
+  echo "Evidence phase=${phase}: ${FGS_SERVICE_CLASS} not running"
+
+  if observed_line="$(find_fgs_notification_line "$DEEP_NOTIFICATION_DUMP")"; then
+    echo "FAIL runId=${RUN_ID} fgs_notification_observed phase=${phase}"
+    echo "$observed_line"
+    exit 1
+  fi
+  echo "Evidence phase=${phase}: FGS notification absent for ${PACKAGE_NAME}"
+
+  if observed_line="$(find_fgs_log_line)"; then
+    echo "FAIL runId=${RUN_ID} foreground_service_log_observed phase=${phase}"
+    echo "$observed_line"
+    exit 1
+  fi
+  echo "Evidence phase=${phase}: no foreground-service start logs observed"
+}
+
+run_fgs_optout_deep_verification() {
+  local wake_lock_observed=0
+  local wake_line=""
+
+  wait_for_ui_smoke_pass "section=background action=fgs-optout-disable" 10 check-fgs
+  wait_for_ui_smoke_pass "section=background action=fgs-optout-timeout-started" 10 check-fgs
+  assert_deep_log_pid_consistency 0
+
+  echo "Sending ${PACKAGE_NAME} to background with HOME"
+  "${ADB_CMD[@]}" shell input keyevent HOME >/dev/null
+  sleep 0.5
+
+  capture_deep_dumpsys "active"
+  assert_no_foreground_service_observed "active"
+
+  if wake_line="$(find_wake_lock_line "$DEEP_POWER_DUMP")"; then
+    wake_lock_observed=1
+    echo "Evidence phase=active: wake lock held"
+    echo "$wake_line"
+  else
+    echo "WARN runId=${RUN_ID} wake_lock_not_observed_during_active_timer tag=${WAKE_LOCK_TAG}"
+    echo "WARN runId=${RUN_ID} wake_lock_validation=best-effort"
+  fi
+
+  wait_for_ui_smoke_pass "section=background action=fgs-optout-timeout-fired" "$TIMEOUT_SECONDS" check-fgs
+  sleep 0.5
+  remember_app_pids
+  assert_deep_log_pid_consistency 1
+
+  capture_deep_dumpsys "after-fired"
+  assert_no_foreground_service_observed "after-fired"
+
+  if wake_line="$(find_wake_lock_line "$DEEP_POWER_DUMP")"; then
+    echo "FAIL runId=${RUN_ID} wake_lock_held_after_timeout_fired tag=${WAKE_LOCK_TAG}"
+    echo "$wake_line"
+    exit 1
+  fi
+
+  if [[ "$wake_lock_observed" -eq 1 ]]; then
+    echo "Evidence phase=after-fired: wake lock released"
+  else
+    echo "WARN runId=${RUN_ID} wake_lock_release_not_proven tag=${WAKE_LOCK_TAG}"
+    echo "WARN runId=${RUN_ID} wake_lock_validation=best-effort"
+  fi
+
+  echo "PASS runId=${RUN_ID} flow=${FLOW}"
+  echo "Log: ${LOG_FILE}"
+  echo "Maestro log: ${MAESTRO_LOG_FILE}"
+  echo "Evidence dir: ${EVIDENCE_DIR}"
+  exit 0
+}
+
 wait_for_ui_smoke_context() {
   local context_marker="[NitroBgUiSmoke] CONTEXT runId=${RUN_ID} mode=ui"
   local deadline=$((SECONDS + CONTEXT_TIMEOUT_SECONDS))
@@ -291,19 +620,12 @@ fi
 
 "${ADB_CMD[@]}" shell pm grant "$PACKAGE_NAME" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 
-if [[ "$FLOW" == "fgs-optout" && "$INSTALL" -eq 0 ]]; then
-  RUNNING_PID="$("${ADB_CMD[@]}" shell pidof "$PACKAGE_NAME" 2>/dev/null | tr -d '\r' || true)"
-  if [[ -n "$RUNNING_PID" ]]; then
-    echo "The fgs-optout flow needs a fresh app process, but ${PACKAGE_NAME} is already running on ${DEVICE}." >&2
-    echo "Close the app manually, wait for the process to exit, or rerun with --install. This script will not use destructive reset commands." >&2
-    exit 2
-  fi
-fi
-
 echo "Android UI smoke runId=${RUN_ID} device=${DEVICE} flow=${FLOW}"
 echo "URL: ${SMOKE_URL}"
 echo "Log capture: logcat -> ${LOG_FILE}"
 
+echo "Clearing logcat before opening UI smoke deep link"
+"${ADB_CMD[@]}" logcat -c >/dev/null 2>&1 || true
 "${ADB_CMD[@]}" logcat -v time -T "$LOG_SINCE" >"$LOG_FILE" 2>&1 &
 LOGCAT_PID="$!"
 sleep 0.5
@@ -342,6 +664,10 @@ fi
 
 remember_app_pids
 
+if [[ "$FLOW" == "fgs-optout-deep" ]]; then
+  run_fgs_optout_deep_verification
+fi
+
 expected_markers_main=(
   "section=set-timeout action=schedule"
   "section=set-timeout action=cancel"
@@ -369,10 +695,18 @@ expected_markers_fgs_optout=(
   "section=background action=disable-fgs"
 )
 
+expected_markers_fgs_optout_deep=(
+  "section=background action=fgs-optout-disable"
+  "section=background action=fgs-optout-timeout-started"
+  "section=background action=fgs-optout-timeout-fired"
+)
+
 if [[ "$FLOW" == "main" ]]; then
   expected_markers=("${expected_markers_main[@]}")
-else
+elif [[ "$FLOW" == "fgs-optout" ]]; then
   expected_markers=("${expected_markers_fgs_optout[@]}")
+else
+  expected_markers=("${expected_markers_fgs_optout_deep[@]}")
 fi
 
 deadline=$((SECONDS + TIMEOUT_SECONDS))

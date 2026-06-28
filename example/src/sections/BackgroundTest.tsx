@@ -12,6 +12,9 @@ import {
 } from '../smoke/uiSmoke'
 
 const INTERVAL = 1000
+const FGS_OPT_OUT_DEEP_TIMEOUT_MS = 12000
+
+type FgsOptoutDeepStatus = 'idle' | 'started' | 'fired' | 'failed'
 
 // Mirrors every Alert to the JS console so Metro / Flipper / Chrome
 // DevTools surface the same content as the on-screen dialog. Useful for
@@ -27,9 +30,14 @@ export function BackgroundTest() {
   const [running, setRunning] = useState(false)
   const [showJs, setShowJs] = useState(true)
   const [lastExpected, setLastExpected] = useState(0)
+  const [fgsOptoutDeepStatus, setFgsOptoutDeepStatus] =
+    useState<FgsOptoutDeepStatus>('idle')
+  const [fgsOptoutDeepDisablePassed, setFgsOptoutDeepDisablePassed] =
+    useState(false)
   const startTimeRef = useRef<number>(0)
   const nativeIdRef = useRef<number | null>(null)
   const jsIdRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const fgsOptoutDeepTimeoutRef = useRef<number | null>(null)
   const nativeTicksRef = useRef(0)
   const jsTicksRef = useRef(0)
   const startTokenRef = useRef<UiSmokeActionToken | null>(null)
@@ -132,6 +140,79 @@ export function BackgroundTest() {
     }
   }, [addLog])
 
+  const runFgsOptoutDeep = useCallback(() => {
+    const runToken = startUiSmokeAction('background', 'fgs-optout-deep', addLog)
+    const disableToken = startUiSmokeAction(
+      'background',
+      'fgs-optout-disable',
+      addLog
+    )
+    let timeoutStartedToken: UiSmokeActionToken | null = null
+    let disablePassed = false
+
+    try {
+      if (fgsOptoutDeepTimeoutRef.current !== null) {
+        BackgroundTimer.clearTimeout(fgsOptoutDeepTimeoutRef.current)
+        fgsOptoutDeepTimeoutRef.current = null
+      }
+
+      setFgsOptoutDeepStatus('idle')
+      setFgsOptoutDeepDisablePassed(false)
+
+      BackgroundTimer.disableForegroundService()
+      addLog('[Background] FGS opt-out deep: foreground service disabled')
+      setFgsOptoutDeepDisablePassed(true)
+      passUiSmokeAction(disableToken, addLog)
+      disablePassed = true
+
+      timeoutStartedToken = startUiSmokeAction(
+        'background',
+        'fgs-optout-timeout-started',
+        addLog
+      )
+
+      fgsOptoutDeepTimeoutRef.current = BackgroundTimer.setTimeout(() => {
+        const timeoutFiredToken = startUiSmokeAction(
+          'background',
+          'fgs-optout-timeout-fired',
+          addLog
+        )
+
+        try {
+          fgsOptoutDeepTimeoutRef.current = null
+          setFgsOptoutDeepStatus('fired')
+          addLog('[Background] FGS opt-out deep: timeout fired')
+          passUiSmokeAction(timeoutFiredToken, addLog)
+        } catch (error) {
+          setFgsOptoutDeepStatus('failed')
+          failUiSmokeAction(timeoutFiredToken, error, addLog)
+          failUiSmokeAction(runToken, error, addLog)
+        }
+      }, FGS_OPT_OUT_DEEP_TIMEOUT_MS)
+
+      setFgsOptoutDeepStatus('started')
+      addLog(
+        `[Background] FGS opt-out deep: timeout scheduled for ${FGS_OPT_OUT_DEEP_TIMEOUT_MS}ms`
+      )
+      passUiSmokeAction(timeoutStartedToken, addLog)
+    } catch (error) {
+      setFgsOptoutDeepStatus('failed')
+      if (!disablePassed) {
+        failUiSmokeAction(disableToken, error, addLog)
+      }
+      if (timeoutStartedToken !== null) {
+        failUiSmokeAction(timeoutStartedToken, error, addLog)
+      }
+      failUiSmokeAction(runToken, error, addLog)
+      if (!runToken.active) {
+        alertAndLog(
+          'FGS opt-out deep failed',
+          error instanceof Error ? error.message : String(error)
+        )
+      }
+    }
+  }, [addLog])
+
   const startBackgroundMode = useCallback(() => {
     const token = startUiSmokeAction('background', 'start-mode', addLog)
     try {
@@ -207,6 +288,9 @@ export function BackgroundTest() {
       }
       if (jsIdRef.current !== null) {
         clearInterval(jsIdRef.current)
+      }
+      if (fgsOptoutDeepTimeoutRef.current !== null) {
+        BackgroundTimer.clearTimeout(fgsOptoutDeepTimeoutRef.current)
       }
     }
   }, [])
@@ -334,6 +418,57 @@ export function BackgroundTest() {
       >
         <Text style={styles.toggleText}>Configure Notification</Text>
       </Pressable>
+      <Pressable
+        style={[styles.toggleBtn, styles.deepRunBtn]}
+        onPress={runFgsOptoutDeep}
+        testID="ui-smoke-fgs-optout-deep-run"
+        accessibilityLabel="ui-smoke-fgs-optout-deep-run"
+        accessibilityRole="button"
+      >
+        <Text style={styles.toggleText}>FGS Opt-Out Deep</Text>
+      </Pressable>
+      {fgsOptoutDeepDisablePassed && (
+        <Text
+          style={[styles.deepStatus, styles.deepStatusPass]}
+          testID="ui-smoke-fgs-optout-disable-pass"
+          accessibilityLabel="ui-smoke-fgs-optout-disable-pass"
+        >
+          FGS opt-out disabled
+        </Text>
+      )}
+      {fgsOptoutDeepStatus !== 'idle' && (
+        <Text
+          style={[
+            styles.deepStatus,
+            fgsOptoutDeepStatus === 'failed'
+              ? styles.deepStatusFail
+              : styles.deepStatusPass,
+          ]}
+          testID={`ui-smoke-fgs-optout-status-${fgsOptoutDeepStatus}`}
+          accessibilityLabel={`ui-smoke-fgs-optout-status-${fgsOptoutDeepStatus}`}
+        >
+          FGS opt-out deep: {fgsOptoutDeepStatus}
+        </Text>
+      )}
+      {(fgsOptoutDeepStatus === 'started' ||
+        fgsOptoutDeepStatus === 'fired') && (
+        <Text
+          style={[styles.deepStatus, styles.deepStatusPass]}
+          testID="ui-smoke-fgs-optout-timeout-started"
+          accessibilityLabel="ui-smoke-fgs-optout-timeout-started"
+        >
+          Timeout started
+        </Text>
+      )}
+      {fgsOptoutDeepStatus === 'fired' && (
+        <Text
+          style={[styles.deepStatus, styles.deepStatusPass]}
+          testID="ui-smoke-fgs-optout-timeout-fired"
+          accessibilityLabel="ui-smoke-fgs-optout-timeout-fired"
+        >
+          Timeout fired
+        </Text>
+      )}
 
     </Section>
   )
@@ -416,5 +551,20 @@ const styles = StyleSheet.create({
   toggleText: {
     fontSize: 13,
     color: '#333',
+  },
+  deepRunBtn: {
+    marginTop: 8,
+  },
+  deepStatus: {
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  deepStatusPass: {
+    color: '#27ae60',
+  },
+  deepStatusFail: {
+    color: '#e74c3c',
   },
 })
