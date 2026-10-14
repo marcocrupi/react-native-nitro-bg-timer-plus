@@ -8,7 +8,7 @@
   "description": "react-native-nitro-bg-timer-plus is a React Native package built with Nitro, forked from react-native-nitro-bg-timer",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",
-  "types": "lib/index.d.ts",
+  "types": "lib/typescript/index.d.ts",
   "react-native": "src/index",
   "source": "src/index",
   "files": [
@@ -32,7 +32,9 @@
     "README.md"
   ],
   "scripts": {
-    "postinstall": "tsc || exit 0;",
+    "build": "bob build",
+    "prepack": "npm run build",
+    "test:package": "node scripts/check-package.cjs",
     "test": "jest",
     "test:watch": "jest --watch",
     "typecheck": "tsc --noEmit",
@@ -152,7 +154,7 @@
       [
         "typescript",
         {
-          "project": "tsconfig.json"
+          "project": "tsconfig.build.json"
         }
       ]
     ]

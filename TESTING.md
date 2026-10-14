@@ -7,10 +7,20 @@ cleanup all require manual verification on each platform.
 
 ## Setup
 
+From the repository root:
+
 1. `yarn install`
-2. `yarn example:android` or `yarn example:ios`
-3. Open the example app on a physical device (Android: USB debugging on;
+2. `yarn build` (Bob generates `lib/typescript/index.d.ts`)
+3. `yarn tsc --project example/tsconfig.json --noEmit --incremental false`
+4. `yarn example:android` or `yarn example:ios`
+5. Open the example app on a physical device (Android: USB debugging on;
    iOS: trusted developer profile)
+
+The example typecheck requires the Bob declarations: installation alone does
+not generate them. Repeat `yarn build` before typechecking after any library
+source/type/spec change or removal of `lib`. Plain `tsc` / `yarn typescript`
+does not generate this layout. Metro uses the library sources directly;
+the declaration build is the prerequisite for the example typecheck.
 
 ## Current validation status
 

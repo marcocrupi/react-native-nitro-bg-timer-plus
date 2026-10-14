@@ -977,8 +977,19 @@ Clone the repo and run:
 
 ```bash
 yarn install
+yarn build         # Bob: generates lib/typescript/index.d.ts and the JS builds
+yarn tsc --project example/tsconfig.json --noEmit --incremental false
 yarn example:ios    # or yarn example:android
 ```
+
+Run these commands from the repository root. The example typecheck resolves
+the library through `lib/typescript/index.d.ts`, which does not exist in a
+clean checkout. `yarn install` does not build the library. Run `yarn build`
+before the first example typecheck, after deleting `lib`, and after changing
+library sources (including public types or Nitro specs) so the declarations
+match the current source. Plain `tsc` / `yarn typescript` uses a different
+output layout and does not replace this Bob build. Metro continues to use
+the library sources directly.
 
 The example app exercises all library use cases including background timer validation, concurrent timers, cleanup verification, and stress testing.
 

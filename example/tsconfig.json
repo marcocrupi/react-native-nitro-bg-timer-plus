@@ -1,3 +1,8 @@
 {
-  "extends": "../node_modules/@react-native/typescript-config/tsconfig.json"
+  "extends": "../node_modules/@react-native/typescript-config/tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "react-native-nitro-bg-timer-plus": ["../lib/typescript/index.d.ts"]
+    }
+  }
 }
