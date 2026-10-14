@@ -54,7 +54,7 @@ export function CleanupTest() {
   const [cleanupTickObserved, setCleanupTickObserved] = useState(false)
   const localLogIdRef = useRef(0)
   const { addLog } = useLog()
-  const scrollRef = useRef<ScrollView>(null)
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null)
   const mountTokenRef = useRef<UiSmokeActionToken | null>(null)
   const unmountTokenRef = useRef<UiSmokeActionToken | null>(null)
   const unmountVerificationRef = useRef<ReturnType<typeof setTimeout> | null>(

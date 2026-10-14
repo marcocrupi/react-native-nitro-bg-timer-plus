@@ -10,6 +10,7 @@ package com.margelo.nitro.backgroundtimer
 import androidx.annotation.Keep
 import com.facebook.jni.HybridData
 import com.facebook.proguard.annotations.DoNotStrip
+import dalvik.annotation.optimization.FastNative
 import com.margelo.nitro.core.HybridObject
 
 /**
@@ -25,41 +26,41 @@ import com.margelo.nitro.core.HybridObject
 )
 abstract class HybridNitroBackgroundTimerSpec: HybridObject() {
   // Properties
-
+  
 
   // Methods
   @DoNotStrip
   @Keep
   abstract fun setTimeout(id: Double, duration: Double): Unit
-
+  
   @DoNotStrip
   @Keep
   abstract fun clearTimeout(id: Double): Unit
-
+  
   @DoNotStrip
   @Keep
   abstract fun setInterval(id: Double, interval: Double): Unit
-
+  
   @DoNotStrip
   @Keep
   abstract fun clearInterval(id: Double): Unit
-
+  
   @DoNotStrip
   @Keep
   abstract fun drainFiredTimers(): Array<FiredTimerEvent>
-
+  
   @DoNotStrip
   @Keep
   abstract fun startBackgroundMode(): Unit
-
+  
   @DoNotStrip
   @Keep
   abstract fun stopBackgroundMode(): Unit
-
+  
   @DoNotStrip
   @Keep
   abstract fun configure(configJson: String): Unit
-
+  
   @DoNotStrip
   @Keep
   abstract fun disableForegroundService(): Unit
@@ -74,6 +75,7 @@ abstract class HybridNitroBackgroundTimerSpec: HybridObject() {
   @Keep
   protected open class CxxPart(javaPart: HybridNitroBackgroundTimerSpec): HybridObject.CxxPart(javaPart) {
     // C++ JHybridNitroBackgroundTimerSpec::CxxPart::initHybrid(...)
+    @FastNative
     external override fun initHybrid(): HybridData
   }
   override fun createCxxPart(): CxxPart {

@@ -32,15 +32,16 @@ let isDisposed = false
 let isDraining = false
 let shouldDrainAgain = false
 
-const timerEventEmitter =
-  Platform.OS === 'ios' && NativeModules.NitroBackgroundTimerEventEmitter
-    ? new NativeEventEmitter(NativeModules.NitroBackgroundTimerEventEmitter)
-    : DeviceEventEmitter
+const onTimersAvailable = () => {
+  drainFiredTimers()
+}
 
 let timerEventSubscription: TimerEventSubscription | undefined =
-  timerEventEmitter.addListener(TIMERS_AVAILABLE_EVENT, () => {
-    drainFiredTimers()
-  })
+  Platform.OS === 'ios' && NativeModules.NitroBackgroundTimerEventEmitter
+    ? new NativeEventEmitter(
+        NativeModules.NitroBackgroundTimerEventEmitter
+      ).addListener(TIMERS_AVAILABLE_EVENT, onTimersAvailable)
+    : DeviceEventEmitter.addListener(TIMERS_AVAILABLE_EVENT, onTimersAvailable)
 
 function handleFiredTimer(event: FiredTimerEvent): CallbackOutcome {
   if (event.type === FiredTimerType.Timeout) {

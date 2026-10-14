@@ -15,7 +15,7 @@ namespace margelo::nitro::backgroundtimer {
   using namespace facebook;
 
   /**
-   * The C++ JNI bridge between the C++ enum "FiredTimerType" and the the Kotlin enum "FiredTimerType".
+   * The C++ JNI bridge between the C++ enum "FiredTimerType" and the Kotlin enum "FiredTimerType".
    */
   struct JFiredTimerType final: public jni::JavaClass<JFiredTimerType> {
   public:

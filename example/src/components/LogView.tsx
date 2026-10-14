@@ -10,7 +10,7 @@ import { useLog } from '../context/LogContext'
 
 export function LogView() {
   const { logs, clearLog } = useLog()
-  const scrollRef = useRef<ScrollView>(null)
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null)
 
   return (
     <View style={styles.container}>

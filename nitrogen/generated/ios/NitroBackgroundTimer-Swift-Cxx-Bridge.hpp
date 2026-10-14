@@ -44,7 +44,7 @@ namespace margelo::nitro::backgroundtimer::bridge::swift {
     vector.reserve(size);
     return vector;
   }
-
+  
   // pragma MARK: std::shared_ptr<HybridNitroBackgroundTimerSpec>
   /**
    * Specialized version of `std::shared_ptr<HybridNitroBackgroundTimerSpec>`.
@@ -52,11 +52,11 @@ namespace margelo::nitro::backgroundtimer::bridge::swift {
   using std__shared_ptr_HybridNitroBackgroundTimerSpec_ = std::shared_ptr<HybridNitroBackgroundTimerSpec>;
   std::shared_ptr<HybridNitroBackgroundTimerSpec> create_std__shared_ptr_HybridNitroBackgroundTimerSpec_(void* NON_NULL swiftUnsafePointer) noexcept;
   void* NON_NULL get_std__shared_ptr_HybridNitroBackgroundTimerSpec_(std__shared_ptr_HybridNitroBackgroundTimerSpec_ cppType);
-
+  
   // pragma MARK: std::weak_ptr<HybridNitroBackgroundTimerSpec>
   using std__weak_ptr_HybridNitroBackgroundTimerSpec_ = std::weak_ptr<HybridNitroBackgroundTimerSpec>;
   inline std__weak_ptr_HybridNitroBackgroundTimerSpec_ weakify_std__shared_ptr_HybridNitroBackgroundTimerSpec_(const std::shared_ptr<HybridNitroBackgroundTimerSpec>& strong) noexcept { return strong; }
-
+  
   // pragma MARK: Result<void>
   using Result_void_ = Result<void>;
   inline Result_void_ create_Result_void_() noexcept {
@@ -65,7 +65,7 @@ namespace margelo::nitro::backgroundtimer::bridge::swift {
   inline Result_void_ create_Result_void_(const std::exception_ptr& error) noexcept {
     return Result<void>::withError(error);
   }
-
+  
   // pragma MARK: Result<std::vector<FiredTimerEvent>>
   using Result_std__vector_FiredTimerEvent__ = Result<std::vector<FiredTimerEvent>>;
   inline Result_std__vector_FiredTimerEvent__ create_Result_std__vector_FiredTimerEvent__(const std::vector<FiredTimerEvent>& value) noexcept {

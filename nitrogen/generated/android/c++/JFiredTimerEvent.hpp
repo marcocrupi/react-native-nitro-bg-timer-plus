@@ -18,7 +18,7 @@ namespace margelo::nitro::backgroundtimer {
   using namespace facebook;
 
   /**
-   * The C++ JNI bridge between the C++ struct "FiredTimerEvent" and the the Kotlin data class "FiredTimerEvent".
+   * The C++ JNI bridge between the C++ struct "FiredTimerEvent" and the Kotlin data class "FiredTimerEvent".
    */
   struct JFiredTimerEvent final: public jni::JavaClass<JFiredTimerEvent> {
   public:

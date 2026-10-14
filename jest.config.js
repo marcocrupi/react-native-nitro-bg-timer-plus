@@ -11,9 +11,11 @@ module.exports = {
       'ts-jest',
       {
         tsconfig: {
-          module: 'CommonJS',
+          module: 'Node16',
           verbatimModuleSyntax: false,
-          moduleResolution: 'Node',
+          moduleResolution: 'Node16',
+          // Node16 emit is isolated; yarn typecheck checks the full source/tests.
+          isolatedModules: true,
         },
       },
     ],

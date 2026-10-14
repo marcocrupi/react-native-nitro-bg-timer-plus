@@ -255,7 +255,7 @@ function AppContent() {
 
     Linking.getInitialURL()
       .then((url) => {
-        if (mounted) handleSmokeUrl(url, 'initial')
+        if (mounted) handleSmokeUrl(url ?? null, 'initial')
       })
       .catch(() => {})
 

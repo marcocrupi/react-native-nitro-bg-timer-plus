@@ -71,16 +71,16 @@ namespace margelo::nitro::backgroundtimer {
   std::vector<FiredTimerEvent> JHybridNitroBackgroundTimerSpec::drainFiredTimers() {
     static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<jni::JArrayClass<JFiredTimerEvent>>()>("drainFiredTimers");
     auto __result = method(_javaPart);
-    return [&]() {
-      size_t __size = __result->size();
+    return [&](auto&& __input) {
+      size_t __size = __input->size();
       std::vector<FiredTimerEvent> __vector;
       __vector.reserve(__size);
       for (size_t __i = 0; __i < __size; __i++) {
-        auto __element = __result->getElement(__i);
+        auto __element = __input->getElement(__i);
         __vector.push_back(__element->toCpp());
       }
       return __vector;
-    }();
+    }(__result);
   }
   void JHybridNitroBackgroundTimerSpec::startBackgroundMode() {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void()>("startBackgroundMode");

@@ -26,12 +26,12 @@ public extension FiredTimerEvent {
   var id: Double {
     return self.__id
   }
-
+  
   @inline(__always)
   var type: FiredTimerType {
     return self.__type
   }
-
+  
   @inline(__always)
   var sequence: Double {
     return self.__sequence
