@@ -22,6 +22,8 @@ type TimerEventSubscription = {
   remove(): void
 }
 
+type CallbackOutcome = { threw: false } | { threw: true; value: unknown }
+
 let nextId = 1
 const timeoutCallbacks = new Map<number, () => void>()
 const intervalCallbacks = new Map<number, () => void>()
@@ -40,31 +42,31 @@ let timerEventSubscription: TimerEventSubscription | undefined =
     drainFiredTimers()
   })
 
-function handleFiredTimer(event: FiredTimerEvent): unknown {
+function handleFiredTimer(event: FiredTimerEvent): CallbackOutcome {
   if (event.type === FiredTimerType.Timeout) {
     const callback = timeoutCallbacks.get(event.id)
     try {
       callback?.()
     } catch (error) {
-      return error
+      return { threw: true, value: error }
     } finally {
       timeoutCallbacks.delete(event.id)
     }
-    return undefined
+    return { threw: false }
   }
 
   if (event.type === FiredTimerType.Interval) {
     const callback = intervalCallbacks.get(event.id)
-    if (!callback) return undefined
+    if (!callback) return { threw: false }
 
     try {
       callback()
     } catch (error) {
-      return error
+      return { threw: true, value: error }
     }
   }
 
-  return undefined
+  return { threw: false }
 }
 
 function drainFiredTimers(): void {
@@ -75,6 +77,7 @@ function drainFiredTimers(): void {
   }
 
   isDraining = true
+  let hasError = false
   let firstError: unknown
 
   try {
@@ -83,9 +86,10 @@ function drainFiredTimers(): void {
       const events = NitroBackgroundTimer.drainFiredTimers()
 
       for (const event of events) {
-        const error = handleFiredTimer(event)
-        if (firstError === undefined && error !== undefined) {
-          firstError = error
+        const outcome = handleFiredTimer(event)
+        if (!hasError && outcome.threw) {
+          hasError = true
+          firstError = outcome.value
         }
       }
     } while (shouldDrainAgain)
@@ -93,7 +97,7 @@ function drainFiredTimers(): void {
     isDraining = false
   }
 
-  if (firstError !== undefined) {
+  if (hasError) {
     throw firstError
   }
 }
