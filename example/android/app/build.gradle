@@ -17,6 +17,10 @@ react {
     //   The cli.js file which is the React Native CLI entrypoint. Default is ../../node_modules/react-native/cli.js
     cliFile = file("../../../node_modules/react-native/cli.js")
 
+    // Hermes V1's compiler is hoisted with the workspace dependencies.
+    def hermesc = System.getProperty("os.name").startsWith("Windows") ? "hermesc.exe" : "hermesc"
+    hermesCommand = file("../../../node_modules/hermes-compiler/hermesc/%OS-BIN%/${hermesc}").absolutePath
+
     /* Variants */
     //   The list of variants to that are debuggable. For those we're going to
     //   skip the bundling of the JS bundle and the assets. By default is just 'debug'.
@@ -102,7 +106,7 @@ android {
             // see https://reactnative.dev/docs/signed-apk-android.
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
-            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }
 }

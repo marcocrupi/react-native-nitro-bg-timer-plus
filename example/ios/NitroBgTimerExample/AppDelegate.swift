@@ -246,7 +246,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
 class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
   @objc(extraModulesForBridge:)
-  override func extraModules(for bridge: RCTBridge) -> [RCTBridgeModule] {
+  func extraModules(for bridge: RCTBridge) -> [RCTBridgeModule] {
     NSLog("[NitroBgSmokeNative] EXTRA_MODULES registered=NitroBgSmokeLog")
     return [NitroBgSmokeLog()]
   }

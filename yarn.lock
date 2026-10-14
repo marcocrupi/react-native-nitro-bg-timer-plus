@@ -7946,7 +7946,7 @@ __metadata:
     react-native: "npm:0.87.1"
     react-native-nitro-bg-timer-plus: "npm:*"
     react-native-nitro-modules: "npm:0.37.1"
-    react-native-safe-area-context: "npm:^5.7.0"
+    react-native-safe-area-context: "npm:5.10.1"
     react-test-renderer: "npm:19.2.5"
     typescript: "npm:5.9.3"
   languageName: unknown
@@ -8670,13 +8670,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-native-safe-area-context@npm:^5.7.0":
-  version: 5.7.0
-  resolution: "react-native-safe-area-context@npm:5.7.0"
+"react-native-safe-area-context@npm:5.10.1":
+  version: 5.10.1
+  resolution: "react-native-safe-area-context@npm:5.10.1"
   peerDependencies:
     react: "*"
     react-native: "*"
-  checksum: 10/9f5d3469c18c90c527c4068560ce4dcc7689e9fc8ddc68b8a5e76c94a6eafdba975ced89a48e08fecfd1303331e8c2498722bc249fcd87b1c5ea64ef3abd1d00
+  checksum: 10/832537389e03bf2705de77ec2eff9400be543b5b244c0a74723ef678894d4c43def97a55e80c1d575fae3a0c7c6f30085dc90c8c216a2a74ee888c128b16e244
   languageName: node
   linkType: hard
 
