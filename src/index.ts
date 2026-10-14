@@ -153,7 +153,12 @@ export const BackgroundTimer = {
     }
     const id = nextId++
     timeoutCallbacks.set(id, callback)
-    NitroBackgroundTimer.setTimeout(id, duration)
+    try {
+      NitroBackgroundTimer.setTimeout(id, duration)
+    } catch (error) {
+      timeoutCallbacks.delete(id)
+      throw error
+    }
     return id
   },
 
@@ -185,7 +190,12 @@ export const BackgroundTimer = {
     }
     const id = nextId++
     intervalCallbacks.set(id, callback)
-    NitroBackgroundTimer.setInterval(id, interval)
+    try {
+      NitroBackgroundTimer.setInterval(id, interval)
+    } catch (error) {
+      intervalCallbacks.delete(id)
+      throw error
+    }
     return id
   },
 

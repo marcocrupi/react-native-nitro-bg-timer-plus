@@ -84,6 +84,198 @@ describe('BackgroundTimer — ID management', () => {
   })
 })
 
+describe.each(['setTimeout', 'setInterval'] as const)(
+  'BackgroundTimer — transactional registration via %s',
+  (method) => {
+    it.each([
+      { label: 'Error', value: new Error('native registration failed') },
+      { label: 'undefined', value: undefined },
+    ])(
+      'removes only the failed callback when native throws $label',
+      ({ value }) => {
+        jest.isolateModules(() => {
+          const { BackgroundTimer, NitroBackgroundTimer } = require('../index')
+          const {
+            FiredTimerType,
+          } = require('../specs/NitroBackgroundTimer.nitro')
+          const {
+            __mockHelpers,
+          } = require('../../__mocks__/react-native-nitro-modules')
+          const calls: string[] = []
+          const existingTimeout = jest.fn(() => calls.push('timeout'))
+          const existingInterval = jest.fn(() => calls.push('interval'))
+          const timeoutId = BackgroundTimer.setTimeout(existingTimeout, 100)
+          const intervalId = BackgroundTimer.setInterval(existingInterval, 100)
+          const failedCallback = jest.fn()
+          const nativeRegister = NitroBackgroundTimer[method]
+          const originalImplementation = nativeRegister.getMockImplementation()
+          let attemptedId: number | undefined
+
+          nativeRegister.mockImplementationOnce((id: number) => {
+            attemptedId = id
+            throw value
+          })
+
+          let didThrow = false
+          let caughtValue: unknown
+          let returnedId: number | undefined
+          try {
+            returnedId = BackgroundTimer[method](failedCallback, 100)
+          } catch (error) {
+            didThrow = true
+            caughtValue = error
+          }
+
+          expect(didThrow).toBe(true)
+          expect(caughtValue).toBe(value)
+          expect(returnedId).toBeUndefined()
+          expect(typeof attemptedId).toBe('number')
+          if (attemptedId === undefined) {
+            throw new Error('Native registration did not capture an ID')
+          }
+          expect(nativeRegister).toHaveBeenLastCalledWith(attemptedId, 100)
+          expect(__mockHelpers.isTimerAccepted(attemptedId)).toBe(false)
+          expect(nativeRegister.getMockImplementation()).toBe(
+            originalImplementation
+          )
+
+          const successfulCallback = jest.fn(() => calls.push('success'))
+          const successfulId = BackgroundTimer[method](successfulCallback, 100)
+          expect(successfulId).toBe(attemptedId + 1)
+          expect(__mockHelpers.isTimerAccepted(successfulId)).toBe(true)
+
+          // Inject a stale event even though native never accepted the timer.
+          // fireTimer(attemptedId) would reject it before reaching the JS map.
+          const staleEvent = {
+            id: attemptedId,
+            type:
+              method === 'setTimeout'
+                ? FiredTimerType.Timeout
+                : FiredTimerType.Interval,
+            sequence: 0,
+          }
+          const drainsBefore = __mockHelpers.drainFiredTimersCalls()
+          __mockHelpers.queuedFiredTimers().push(staleEvent)
+          __mockHelpers.emitTimersAvailable()
+
+          expect(__mockHelpers.drainFiredTimersCalls()).toBe(drainsBefore + 1)
+          expect(__mockHelpers.queuedFiredTimers()).toHaveLength(0)
+          expect(failedCallback).not.toHaveBeenCalled()
+
+          __mockHelpers.queueTimer(timeoutId)
+          __mockHelpers.queueTimer(intervalId)
+          __mockHelpers.queueTimer(successfulId)
+          __mockHelpers.emitTimersAvailable()
+          expect(calls).toEqual(['timeout', 'interval', 'success'])
+
+          __mockHelpers.queuedFiredTimers().push(staleEvent)
+          __mockHelpers.fireTimer(successfulId)
+          __mockHelpers.emitTimersAvailable()
+          expect(failedCallback).not.toHaveBeenCalled()
+          expect(existingTimeout).toHaveBeenCalledTimes(1)
+          expect(existingInterval).toHaveBeenCalledTimes(1)
+          expect(successfulCallback).toHaveBeenCalledTimes(
+            method === 'setTimeout' ? 1 : 2
+          )
+        })
+      }
+    )
+
+    it('preserves reentrant registrations and batch order when native throws during drain', () => {
+      jest.isolateModules(() => {
+        const { BackgroundTimer, NitroBackgroundTimer } = require('../index')
+        const {
+          FiredTimerType,
+        } = require('../specs/NitroBackgroundTimer.nitro')
+        const {
+          __mockHelpers,
+        } = require('../../__mocks__/react-native-nitro-modules')
+        const error = new Error('reentrant registration failed')
+        const calls: string[] = []
+        const failedCallback = jest.fn()
+        const nestedCallback = jest.fn(() => calls.push('nested'))
+        let didThrow = false
+        let caughtValue: unknown
+        let attemptedId: number | undefined
+        let nestedId: number | undefined
+        const triggerId = BackgroundTimer.setTimeout(() => {
+          calls.push('trigger')
+          try {
+            BackgroundTimer[method](failedCallback, 100)
+          } catch (caught) {
+            didThrow = true
+            caughtValue = caught
+            calls.push('caught')
+          }
+        }, 100)
+        const tailId = BackgroundTimer.setTimeout(() => calls.push('tail'), 100)
+        const nativeRegister = NitroBackgroundTimer[method]
+        const originalImplementation = nativeRegister.getMockImplementation()
+        nativeRegister.mockImplementationOnce((id: number) => {
+          attemptedId = id
+          nestedId = BackgroundTimer[method](nestedCallback, 100)
+          __mockHelpers.queuedFiredTimers().push({
+            id,
+            type:
+              method === 'setTimeout'
+                ? FiredTimerType.Timeout
+                : FiredTimerType.Interval,
+            sequence: 3,
+          })
+          __mockHelpers.queueTimer(nestedId)
+          __mockHelpers.emitTimersAvailable()
+          throw error
+        })
+
+        __mockHelpers.queueTimer(triggerId)
+        __mockHelpers.queueTimer(tailId)
+        const drainsBefore = __mockHelpers.drainFiredTimersCalls()
+        __mockHelpers.emitTimersAvailable()
+
+        expect(didThrow).toBe(true)
+        expect(caughtValue).toBe(error)
+        expect(typeof attemptedId).toBe('number')
+        expect(typeof nestedId).toBe('number')
+        expect(nestedId).not.toBe(attemptedId)
+        expect(failedCallback).not.toHaveBeenCalled()
+        expect(nestedCallback).toHaveBeenCalledTimes(1)
+        expect(calls).toEqual(['trigger', 'caught', 'tail', 'nested'])
+        expect(__mockHelpers.drainFiredTimersCalls()).toBe(drainsBefore + 2)
+        expect(__mockHelpers.queuedFiredTimers()).toHaveLength(0)
+        expect(nativeRegister.getMockImplementation()).toBe(
+          originalImplementation
+        )
+      })
+    })
+
+    it('registers the callback before a synchronous native fire and preserves success', () => {
+      jest.isolateModules(() => {
+        const { BackgroundTimer, NitroBackgroundTimer } = require('../index')
+        const {
+          __mockHelpers,
+        } = require('../../__mocks__/react-native-nitro-modules')
+        const callback = jest.fn()
+        const nativeRegister = NitroBackgroundTimer[method]
+        const originalImplementation = nativeRegister.getMockImplementation()
+        nativeRegister.mockImplementationOnce((id: number, delay: number) => {
+          originalImplementation(id, delay)
+          __mockHelpers.fireTimer(id)
+          expect(callback).toHaveBeenCalledTimes(1)
+        })
+
+        const id = BackgroundTimer[method](callback, 100)
+        expect(nativeRegister).toHaveBeenCalledWith(id, 100)
+        expect(nativeRegister.getMockImplementation()).toBe(
+          originalImplementation
+        )
+        expect(callback).toHaveBeenCalledTimes(1)
+        __mockHelpers.fireTimer(id)
+        expect(callback).toHaveBeenCalledTimes(method === 'setTimeout' ? 1 : 2)
+      })
+    })
+  }
+)
+
 describe('BackgroundTimer — callback invocation', () => {
   it('setTimeout stores the callback in JS and calls native without a callback argument', () => {
     jest.isolateModules(() => {
