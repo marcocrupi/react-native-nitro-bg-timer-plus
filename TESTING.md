@@ -1,737 +1,426 @@
-# Manual testing checklist
+# Testing and qualification
 
-This checklist must be executed on a real device before publishing a new
-version of the library. The unit tests cover the JS layer in isolation; the
-native lifecycle, wake lock behaviour, threading, and runtime-invalidation
-cleanup all require manual verification on each platform.
+Use this guide for manual and semi-automated validation. Tests establish only the
+contracts they observe. Keep host checks, core smoke, UI smoke and Release Physical
+QA separate; record device/OS, build mode, source/artifact identity, runId, PID,
+clocks, observations, raw exits and skipped checks. Never infer universal device
+support from one successful run.
 
-## Setup
+## Setup and evidence rules
 
-From the repository root:
+Use the pinned toolchain in [CONTRIBUTING.md](CONTRIBUTING.md). From the root:
 
-1. `yarn install`
-2. `yarn build` (Bob generates `lib/typescript/index.d.ts`)
-3. `yarn tsc --project example/tsconfig.json --noEmit --incremental false`
-4. `yarn example:android` or `yarn example:ios`
-5. Open the example app on a physical device (Android: USB debugging on;
-   iOS: trusted developer profile)
-
-The example typecheck requires the Bob declarations: installation alone does
-not generate them. Repeat `yarn build` before typechecking after any library
-source/type/spec change or removal of `lib`. Plain `tsc` / `yarn typescript`
-does not generate this layout. Metro uses the library sources directly;
-the declaration build is the prerequisite for the example typecheck.
-
-## Current validation status
-
-- Core smoke iOS physical device: previously validated with `RESULT PASS`; not
-  revalidated in this cycle.
-- Core smoke Android physical device foreground: previously validated with
-  `RESULT PASS`.
-- Core smoke Android physical device background: previously validated with
-  `RESULT PASS`.
-- Android physical-device UI smoke main flow: validated with `RESULT PASS` in
-  this cycle.
-- UI smoke iOS simulator main flow: previously validated with `RESULT PASS`;
-  not revalidated in this cycle.
-- Maestro on physical iPhone: best-effort because local driver setup and
-  signing can fail outside the library runtime.
-- Real-device `fgs-optout` smoke: separate flow, not validated in this cycle.
-- Long background/Home behavior, lock-screen behavior, and OEM Android
-  background policy: not validated in this cycle.
-
-## Automated smoke test
-
-The example app exposes a smoke mode via:
-
-```txt
-nitrobgtimerexample://smoke?runId=<id>
+```sh
+yarn install --immutable
+yarn build
+yarn tsc --project example/tsconfig.json --noEmit --incremental false
+yarn example:start
+# In another terminal:
+yarn example:android
+# Or, after Pods:
+yarn example:ios
 ```
 
-It logs machine-readable markers to the JS console:
+Bob declarations are needed for example typechecking, not for Metro's workspace
+source resolution. Native/spec changes require a native rebuild. Use a fresh
+example process for every one-shot smoke, QA, opt-out or dispose scenario.
+Fast Refresh can preserve runtime state; it is not a clean process or proof of
+runtime invalidation. Clear your timers after reversible UI checks.
 
-```txt
-[NitroBgSmoke] DEEPLINK_RECEIVED runId=<id> url=<url>
-[NitroBgSmoke] DEEPLINK_IGNORED runId=<id|none> reason=<reason>
-[NitroBgSmoke] NATIVE_PENDING_URL_CHECK runId=none
-[NitroBgSmoke] NATIVE_PENDING_URL_FOUND runId=<id> url=<url>
-[NitroBgSmoke] NATIVE_PENDING_URL_EMPTY runId=none
-[NitroBgSmoke] RUN_REQUESTED runId=<id>
-[NitroBgSmoke] START runId=<id>
-[NitroBgSmoke] STEP PASS runId=<id> name=<step>
-[NitroBgSmoke] STEP FAIL runId=<id> name=<step> reason=<reason>
-[NitroBgSmoke] BACKGROUND_READY runId=<id>
-[NitroBgSmoke] RESULT PASS runId=<id>
-[NitroBgSmoke] RESULT FAIL runId=<id> reason=<reason>
+All manual scenarios below require a known source/build, captured application
+logs, and a target appropriate to the observation. Android notification checks
+need permission/channel visibility; service state is checked separately.
+Background checks on physical devices should use a Release build without a
+debugger for qualification. Use dedicated virtual devices or host fixtures for
+fault injection; do not deliberately provoke failed-promotion process crashes on
+a personal phone. No global power/security workaround is required.
+
+Record PASS only when preconditions and observations are established. Use FAIL
+for a violated observed contract, BLOCKED for missing setup, NOT_RUN for omitted
+checks and NOT_OBSERVED for an unproven natural event. Preserve unsuccessful
+attempts. Current queue/resource snapshots carry more weight than old log lines.
+
+## Test layers and current status
+
+| Layer | Entry point | What it establishes |
+| --- | --- | --- |
+| Wrapper/unit | `yarn test --runInBand` | JS validation, callback ownership, registration rollback/error propagation with mocks. |
+| Example/unit | `yarn --cwd example test --runInBand` | Example parsers, smoke and resource-ownership logic. |
+| Host harness | Node/Python commands below | Controlled parser, supervision, stale-evidence and failure witnesses. |
+| Core smoke | `smoke:android`, `smoke:ios` | Real wrapper/native delivery in the selected build/target. |
+| UI smoke | `ui-smoke:android`, `ui-smoke:ios` | Maestro button handlers and bound core run; foreground UI flow. |
+| Physical QA | `scripts/physical-qa.sh` | Release artifact/process-bound scenarios and external resource/provenance checks. |
+
+```sh
+yarn tsc --noEmit --composite false --incremental false
+yarn lint-ci
+node --test scripts/smoke-harness.test.cjs scripts/smoke-runner-fixture.test.cjs
+python3 scripts/physical-qa.test.py
 ```
 
-Smoke deep links with a malformed `runId` are ignored with
-`DEEPLINK_IGNORED reason=invalid_run_id`.
+`lint-ci` does not fix files; `lint` does. These checks do not qualify device
+background behavior. Physical QA **currently refuses main** due to its historical
+HEAD/documentation hashes. Read [the blocker](PHYSICAL_QA.md#current-execution-blocker)
+before any campaign, including dry-run. Its two entry-point discovery fixtures
+can pass at that earlier gate and do not prove discovery is exercised.
 
-Run Android smoke after installing the example app and starting Metro:
+Historical selected physical results and gaps are summarized in
+[qualification boundaries](PHYSICAL_QA.md#qualification-boundaries). They are not
+new executions of the current documentation candidate. Battery Saver, some
+lock/unlock checks, full iOS private-task release timing and arbitrary failed
+initial FGS promotion remain unqualified. Do not describe these as PASS.
+
+## Core smoke
+
+Core deep link:
+
+```text
+nitrobgtimerexample://smoke?runId=UNIQUE_ID
+```
+
+Use 1–80 characters from letters, digits, `.`, `_`, `-`. Malformed IDs are ignored.
+The harness covers timeout/interval delivery, cancellation, native event drain,
+batch ordering, reentrant scheduling and terminal disposal. Native timer callbacks
+do not directly retain application JS functions. The final dispose makes core
+one-shot for the wrapper's lifetime.
+
+### Android runner
+
+Start Metro for Debug and build/install the current example. The runner expects
+the selected APK for installed-artifact verification; provide `--apk` when using
+a different output path. For Release `--apk`, install that matching artifact first
+through your normal build/install workflow. `--install` runs
+`yarn example:android --deviceId` to build/install the example; it does not install the file passed to `--apk`:
 
 ```sh
 yarn smoke:android
+bash scripts/smoke-android.sh --device YOUR_ADB_SERIAL --install
+bash scripts/smoke-android.sh --device YOUR_ADB_SERIAL --background
+bash scripts/smoke-android.sh --device YOUR_ADB_SERIAL \
+  --apk /path/to/app-release.apk --run-id android-core-001
 ```
 
-Use the optional background window automation on Android:
+`--background` automates a bounded Home/resume window. It does not qualify screen
+lock, all power modes or every OEM. Target locks/run-ID admission, process identity,
+artifact checks and crash checks are part of the runner contract; preserve its
+printed log paths and raw exits.
+
+### iOS runner
+
+A booted simulator or a paired, trusted, unlocked physical device is required.
+Build/install are on by default; Debug requires Metro. Device CoreDevice and
+Xcode UDID may differ:
 
 ```sh
-yarn smoke:android --background
-```
-
-Run iOS simulator smoke after booting a simulator and starting Metro:
-
-```sh
-yarn smoke:ios
-```
-
-The iOS automated runner builds the Debug example app with `xcodebuild`,
-installs the resulting `.app`, opens the smoke deep link, captures logs, and
-waits for the matching `RESULT PASS/FAIL` marker. Build and install are on by
-default so the smoke does not accidentally test an old app already installed
-on the simulator or device.
-
-On iOS, the example app duplicates JS `[NitroBgSmoke]` markers to native logs
-through an example-only `NitroBgSmokeLog` module. This module is diagnostics
-for the example app only and is not a public library API. Native
-`[NitroBgSmokeNative] OPEN_URL` and `[NitroBgSmokeNative] LAUNCH_URL` markers
-mean iOS received the smoke deep link before React Native Linking handles it.
-The same example-only module also stores the last smoke URL received by
-`AppDelegate` in memory so JS can consume it as a fallback when `Linking` does
-not deliver the URL. `NATIVE_PENDING_URL_FOUND` means this fallback delivered
-the URL to the JS smoke harness. `source=native_pending_url` identifies a JS
-smoke run started from this example-only native pending URL fallback. It is
-valid to see `NATIVE_PENDING_URL_FOUND` followed by
-`DEEPLINK_IGNORED reason=duplicate` when the normal React Native Linking event
-has already started the same run.
-
-On physical devices, the default launch strategy is
-`--launch-strategy launch-then-open-url`: the script launches the app with
-`devicectl --console`, waits briefly for JS boot, then sends the smoke deep
-link with a separate `devicectl --payload-url` command while continuing to read
-the same console stream. Use `--launch-strategy payload-at-launch` to retry the
-legacy single launch command that combines `--console` and `--payload-url`.
-
-Run iOS physical device smoke with a connected, unlocked, trusted device:
-
-```sh
-bash scripts/smoke-ios.sh --device <udid>
-bash scripts/smoke-ios.sh --device <udid> --run-id ios-device-1
-```
-
-On physical devices, `devicectl` and `xcodebuild` may expose different
-identifiers. Use `--device` for `devicectl` and `--xcodebuild-device-id` for
-the `xcodebuild` destination if automatic resolution fails.
-
-Use these flags when reusing a previous build or a known DerivedData path:
-
-```sh
-bash scripts/smoke-ios.sh --skip-build --derived-data /tmp/nitro-bg-timer-xcodebuild
-bash scripts/smoke-ios.sh --skip-build --skip-install
-bash scripts/smoke-ios.sh --derived-data /tmp/nitro-bg-timer-xcodebuild
-```
-
-Automated iOS mode must launch a fresh example app process so
-`devicectl --console` or `simctl log stream` can observe the run. If the app
-is already running, the script fails by default. To let the script terminate
-only the example app and continue, pass:
-
-```sh
-bash scripts/smoke-ios.sh --device <udid> --terminate-existing
 bash scripts/smoke-ios.sh --simulator --terminate-existing
+bash scripts/smoke-ios.sh --device YOUR_COREDEVICE_ID \
+  --xcodebuild-device-id YOUR_XCODE_UDID --terminate-existing
+bash scripts/smoke-ios.sh --device YOUR_COREDEVICE_ID \
+  --xcodebuild-device-id YOUR_XCODE_UDID --configuration Release \
+  --terminate-existing --run-id ios-core-001
 ```
 
-Use manual open-url mode only when the app is already launched from Xcode or
-another harness and you want to observe Metro or Xcode yourself:
+Automated capture starts a fresh process by default, terminating an existing
+example process. `--terminate-existing` is retained as a compatibility flag;
+termination is already enabled. The default physical-device launch strategy is `launch-then-open-url`; `--launch-strategy
+payload-at-launch` selects the alternative. The example mirrors JS markers through
+`NitroBgSmokeLog` and can consume the pending URL stored by AppDelegate when
+React Native Linking does not deliver it.
+
+`--derived-data PATH` selects build output. `--skip-build` requires matching
+build output (supply its DerivedData path). Automated physical-device runs reject
+`--skip-install` because installation is required for provenance. Simulator
+`--skip-install` still requires comparison against the matching local app. These
+flags are not necessary for an ordinary fresh run. Manual mode only sends the URL:
 
 ```sh
-bash scripts/smoke-ios.sh --device <udid> --open-url-only
-bash scripts/smoke-ios.sh --device <udid> --run-id manual-ios-1 --open-url-only
+bash scripts/smoke-ios.sh --device YOUR_COREDEVICE_ID --open-url-only
 ```
 
-`--open-url-only` only sends `nitrobgtimerexample://smoke?runId=<id>`; it does
-not build, install, terminate the app, capture logs, or wait for
-`RESULT PASS/FAIL`. The `[NitroBgSmoke]` markers are JS `console.log` markers,
-so in manual mode they may appear in Metro or Xcode rather than the script.
+`--open-url-only` does not build, install, terminate, capture or wait for a result.
+Observe Metro/Xcode yourself. It is not an automated PASS. Core alone does not
+press Home on a physical iPhone; Physical QA has the separate background route.
 
-The smoke covers public `BackgroundTimer` API behavior for `setTimeout`,
-`clearTimeout`, `setInterval`, `clearInterval`, callback-free timer delivery
-through the native fired-event queue and JS drain, batch ordering, reentrant
-scheduling, a short background-ready interval, and final `dispose()`. The
-scripts exit with:
+### Markers and failure diagnosis
 
-```txt
-0   RESULT PASS
-1   RESULT FAIL, crash, RedBox, or runtime error marker
-2   preflight, configuration, build, install, or launch setup failure
-124 timeout waiting for a matching RESULT marker
+Core uses `[NitroBgSmoke]` with `runId`, `START`, `STEP PASS/FAIL`, and final
+`RESULT PASS/FAIL`; URL diagnostics include `DEEPLINK_RECEIVED`, ignored reasons
+and native pending-URL markers. iOS native `OPEN_URL`/`LAUNCH_URL` proves URL
+receipt by iOS, not JS callback delivery. Event-module/signal/drain diagnostics
+are supporting observations, not substitutes for callback assertions.
+
+| Last observation | Next investigation |
+| --- | --- |
+| No native or JS URL marker | Target/process launch, URL registration, capture, pairing, Metro in Debug. |
+| Native URL only | JS boot, Linking/pending URL fallback, native console mirror. |
+| `DEEPLINK_RECEIVED` without START | ID/mode validation, duplicate admission or another active run. |
+| START without RESULT | Last step, signal/drain/callback path, suspension, capture interruption or process death. |
+| RESULT FAIL / JS error | Preserve failing step/error and identities; classify setup versus product evidence. |
+
+Core runner exits: 0 matching validated PASS; 1 assertion/crash/runtime failure;
+2 setup/preflight/build/install/launch failure; 124 bounded timeout. A stale PASS,
+wrong process, incomplete steps or later FAIL must not be accepted.
+
+## UI smoke
+
+UI mode sets a run identity and leaves controls interactive:
+
+```text
+nitrobgtimerexample://smoke?runId=UNIQUE_ID&mode=ui
 ```
 
-The smoke is one-shot per app process because it calls
-`BackgroundTimer.dispose()` at the end. Reload or restart the app before
-running the smoke again in the same process, including after a manual
-`--open-url-only` run.
-
-Use the last marker reported by the iOS script to classify failures:
-
-- No marker: URL delivery or JS console log capture issue. Verify Metro is
-  running with `yarn example:start`, the target simulator is booted or the
-  device is connected/unlocked/trusted, the example app was not already
-  running, and the full log path printed by the script.
-- `native_url_received`: the URL reached iOS, but the JS smoke handler has not
-  logged `DEEPLINK_RECEIVED` yet. This points to React Native Linking, JS
-  console capture, or app JS initialization.
-- `native_pending_url_found`: JS consumed the pending URL stored by
-  `AppDelegate`, but did not log `DEEPLINK_RECEIVED`.
-- `DEEPLINK_RECEIVED` but no `START`: the deep link reached JS, but the app
-  smoke handler did not start the smoke.
-- `START` but no `RESULT`: the smoke started, but the timer/event bridge did
-  not complete or the app stopped before result logging.
-- `RESULT FAIL`: smoke assertion failure; inspect the failing step and reason.
-
-If the app was launched from Xcode, use `--open-url-only` instead of automated
-mode. If `--skip-install` was used, rerun without it to avoid testing a stale
-installed app.
-
-Physical iOS backgrounding still requires manual validation or a future
-XCUITest that presses Home.
-
-## UI button smoke
-
-The UI button smoke is separate from the automated core smoke above.
-
-- Core smoke opens `nitrobgtimerexample://smoke?runId=<id>` and executes the
-  timer API harness automatically.
-- UI button smoke opens
-  `nitrobgtimerexample://smoke?runId=<id>&mode=ui`, keeps the app
-  interactive, then uses Maestro to press the example app buttons.
-
-`mode=ui` only activates the UI smoke run id. It must not start the core smoke
-until Maestro presses the "Run Smoke" button, which is intentionally last
-because the core smoke calls `BackgroundTimer.dispose()`.
-
-Outside `mode=ui`, the example app behaves like the normal manual demo: button
-taps do not emit `[NitroBgUiSmoke]` markers and do not apply UI-smoke-only
-shortcuts such as reduced timer durations or suppressed alerts.
-
-UI button smoke markers are machine-readable:
-
-```txt
-[NitroBgUiSmoke] START runId=<id> section=<section> action=<action>
-[NitroBgUiSmoke] PASS runId=<id> section=<section> action=<action>
-[NitroBgUiSmoke] FAIL runId=<id> section=<section> action=<action> reason=<reason>
-```
-
-Maestro is required and is not installed automatically:
+Maestro must already be available. The scripts own launch/context; Maestro drives
+stable testIDs and runs core smoke last because it disposes the wrapper.
+`[NitroBgUiSmoke]` action START/PASS/FAIL markers and the bound core result qualify
+the flow, not Maestro exit 0 alone. Normal manual mode has no UI-smoke shortcuts.
 
 ```sh
 maestro --version
 yarn ui-smoke:android
-yarn ui-smoke:ios
+bash scripts/ui-smoke-android.sh --device YOUR_ADB_SERIAL --flow main
+bash scripts/ui-smoke-android.sh --device YOUR_ADB_SERIAL --flow fgs-optout
+bash scripts/ui-smoke-android.sh --device YOUR_ADB_SERIAL --flow fgs-optout-deep
+bash scripts/ui-smoke-ios.sh --simulator YOUR_SIMULATOR_UDID --flow main
+bash scripts/ui-smoke-ios.sh --device YOUR_COREDEVICE_ID \
+  --xcodebuild-device-id YOUR_XCODE_UDID --maestro-device-id YOUR_MAESTRO_ID
 ```
 
-Android UI smoke with Maestro requires Maestro installed and available in
-`PATH`. Runtime Android smoke is validated separately by
-`scripts/smoke-android.sh`; a missing Maestro binary is an environment
-prerequisite failure for UI smoke, not a runtime failure.
+The main flow checks timeout fire/cancel, interval controls, reversible Background
+Test controls, concurrent timers, mount/unmount cleanup, hook restart/stop, bounded
+100-timer stress and core smoke. Opt-out flows are separate fresh-process lanes;
+the Android script force-stops the example before every UI flow. `--install`
+optionally builds/installs via `yarn example:android`, independently of `--apk`.
+Android `fgs-optout-deep` adds its own background/resource checks.
+Main UI success does not qualify background, lock-screen or long-run execution.
 
-On Android, `scripts/ui-smoke-android.sh` owns launch/setup for the main flow:
-it force-stops the example app before the deep link, opens
-`nitrobgtimerexample://smoke?runId=<id>&mode=ui`, waits for
-`CONTEXT runId=<id> mode=ui`, and then starts Maestro. Maestro drives the
-already configured app and does not run `launchApp` or `openLink` after that
-context. Crash detection is scoped to `com.nitrobgtimerexample`, so Maestro
-driver process failures are not classified as example app crashes.
+Physical iPhone Maestro is best-effort because driver/signing setup may fail.
+Keep that infrastructure result separate from core iOS/native qualification.
+Consult each script's `--help`; flags are not interchangeable across core, UI
+and Physical QA runners.
 
-Install Maestro from <https://maestro.mobile.dev/> if the scripts exit with:
+## Android manual and semi-automated scenarios
 
-```txt
-Maestro is required for UI smoke. Install it from https://maestro.mobile.dev/ ...
-```
+For each scenario, preserve current PID/runtime/context and observation times.
+The Physical QA scenario names below are references to implemented contracts,
+subject to the documented execution blocker, not claims of new runs.
 
-The main UI smoke flow is foreground-only. It presses stable `testID`
-selectors, not coordinates, and validates PASS/FAIL per section/action from
-captured logs. It covers:
+### A1 — Standard callbacks, cancellation and disposal
 
-- setTimeout schedule/fire and cancel
-- setInterval start, stop, reset
-- Background Test reversible foreground actions
-- Concurrent Timers start all and stop all
-- Cleanup mount, tick observation, and unmount cleanup window
-- `useBackgroundTimer` hook start, restart, and stop
-- Stress Test 100 timers
-- Automated Smoke Test "Run Smoke" last
+**Precondition:** Fresh app; use timeout/interval, concurrent, cleanup and smoke
+sections. **Procedure:** Observe one timeout, several interval callbacks and
+multiple IDs; cancel pending timeout and running interval before their next
+needed delivery. Run terminal core smoke last. **Expected/observe:** One delivery
+per delivered timeout, distinct IDs, no callback after a proven clear, repeated
+dispose harmless; scheduling/configure/start after disposal reject. An executing
+callback cannot be preempted. **Automation/limit:** `core`/`timers` and UI main;
+UI counts alone do not prove native resource release.
 
-Android:
+### A2 — Home/resume and long-run
+
+**Precondition:** Known Release build, notification visibility and captured live
+logs; record initial active state. **Procedure:** Use Physical QA `background`
+(25-second qualifying timeout) or `long-run` (five minutes), with Home then resume.
+For manual Background Test, record monotonic elapsed time and each callback
+receipt before returning. **Expected/observe:** Successful Home/resume, active →
+background → active, same PID/artifact, live qualifying callback before resume,
+current FGS/wake lock and final cleanup. Long-run samples current service again
+at five minutes. **Limit:** No universal drift/count threshold; coalesced interval
+counts are not elapsed time. Lock/unlock is separate, opt-in manual evidence and
+not filled by Home. Battery Saver is NOT_RUN in the runner. Do not change global
+power policy to force a result.
+
+### A3 — Activity recreation versus runtime teardown (F2/F3)
+
+**Precondition:** Instrumented example identities; runtime retained for recreation.
+**Procedure:** Physical QA `recreate` invokes actual Activity recreation and
+checks identities plus subsequent timers. To establish pending-timer preservation
+separately, a bounded integration harness must keep a timeout/interval pending
+across recreation. **Expected/observe:** Changed nonzero Activity identity,
+unchanged PID/context/runtime/worker and continuing timer usability. **Limit:**
+The current automated `recreate` scenario does not keep its tested timer pending
+through the recreation; subsequent success is narrower evidence.
+
+For runtime replacement, use `reload`: start old timers/explicit hold, invoke real
+`ReactHost.reload`, observe new runtime/context and termination of old workers.
+Require a resource-free interval (old service/wake lock absent) **before** new
+timer demand, then verify new callbacks. Manual `ReactHost.destroy` coverage
+requires a dedicated integration harness and is a separate result. Fast Refresh,
+Activity destruction and process kill do not prove this invalidation barrier.
+Do not expect Java callbacks to run during force-kill. Runtime invalidation also
+waits for manual disposal already in flight.
+
+### A4 — Implicit/explicit FGS and wake locks
+
+**Precondition:** Fresh app without opt-out; permission/channel visibility recorded.
+**Procedure:** Start a timer without explicit mode; inspect current service and
+UID-owned `NitroBgTimer::WakeLock`. Clear it and wait for cleanup. Then start
+explicit mode without timers, add/clear timers, and release explicit mode.
+**Expected/observe:** Implicit request begins at timer acceptance, even in
+foreground; final timer completion releases implicit demand. Explicit mode keeps
+service demand across timer gaps; it alone need not hold a timer wake lock.
+Stopping explicit mode does not cancel active timers. **Automation/limit:**
+`fgs`, `background`, `long-run`, notification and cleanup snapshots. A notification
+or old acquire/release log is insufficient proof of current service/lock state.
+
+Example read-only snapshots, with your current target serial:
 
 ```sh
-yarn ui-smoke:android
-bash scripts/ui-smoke-android.sh --device <serial>
-bash scripts/ui-smoke-android.sh --flow fgs-optout --device <serial>
+adb -s YOUR_ADB_SERIAL shell dumpsys activity services com.nitrobgtimerexample
+adb -s YOUR_ADB_SERIAL shell dumpsys power
+adb -s YOUR_ADB_SERIAL shell dumpsys notification --noredact --package com.nitrobgtimerexample
 ```
 
-Current status: Android physical-device UI smoke main flow is validated with
-`RESULT PASS`. The `fgs-optout` flow remains separate and is not validated in
-this cycle.
-
-iOS simulator:
-
-```sh
-yarn ui-smoke:ios
-bash scripts/ui-smoke-ios.sh --simulator <udid>
-```
-
-iOS UI smoke with Maestro is simulator-first. The flow is foreground-only and
-presses app UI controls, so a booted simulator is the recommended target for
-the automated UI button smoke. The simulator main flow has been validated
-with `RESULT PASS`.
-
-iOS physical device:
-
-```sh
-bash scripts/ui-smoke-ios.sh --device <devicectl-id>
-bash scripts/ui-smoke-ios.sh --device <devicectl-id> --xcodebuild-device-id <xcodebuild-id>
-bash scripts/ui-smoke-ios.sh \
-  --device C274F5E5-B73D-556F-9589-E384F79EF805 \
-  --xcodebuild-device-id 00008140-00195819267B801C \
-  --maestro-device-id 00008140-00195819267B801C \
-  --run-id ios-ui-device-001 \
-  --flow main
-```
-
-Maestro on a physical iPhone is best-effort and experimental because it
-requires Maestro's iOS driver setup and local signing. Physical device runs may
-need three separate ids:
-
-- `--device` for `devicectl`
-- `--xcodebuild-device-id` for `xcodebuild`
-- `--maestro-device-id` for Maestro
-
-If Maestro physical-device execution fails during driver setup, do not treat
-that alone as a library failure. XCUITest is the recommended follow-up for
-robust iOS physical-device automation.
-
-`Disable FGS` is intentionally outside the main flow because it is not
-reversible in the same app process. Use the `fgs-optout` flow as a fresh,
-one-shot process check. The Android script refuses to run that flow when the
-example app process is already running unless `--install` is used:
-
-```sh
-bash scripts/ui-smoke-android.sh --flow fgs-optout
-bash scripts/ui-smoke-ios.sh --flow fgs-optout
-```
-
-Current status: real-device `fgs-optout` smoke is not validated in this cycle.
-
-The UI button smoke does not validate true background/Home behavior, long
-background execution, iOS background execution, lock-screen behavior, or OEM
-Android background policy. Those remain manual checks or future native UI
-automation.
-
-## Android tests
-
-> Android cleanup follows React Native runtime invalidation. Activity
-> recreation with a retained runtime preserves timers. Fast Refresh can retain
-> the runtime; a full reload must be distinguished by a new runtime/context.
-> Record PID, runtime/context, owner and worker identities during these checks.
-
-### A1 — Basic timer functionality
-
-- [ ] `setTimeout` fires once after the specified delay
-- [ ] `setInterval` fires repeatedly at the specified interval
-- [ ] `clearTimeout` cancels a pending timeout
-- [ ] `clearInterval` cancels a running interval
-
-### A2 — Background execution
-
-- [ ] Start a 30-second `setTimeout`, immediately background the app
-- [ ] After 30s, verify the callback fired
-- [ ] Repeat with `setInterval` (5s interval, 60s total) — verify all 12
-      ticks fired while backgrounded
-- [ ] Lock the screen during a running interval — verify ticks continue
-
-### A3 — Dispose lifecycle
-
-- [ ] Call `BackgroundTimer.dispose()` from a button — verify no errors
-- [ ] After dispose, calling `setTimeout` throws an `Error` with a message
-      containing `disposed`
-- [ ] After dispose, calling `clearTimeout` is silent (no throw)
-- [ ] Calling `dispose()` twice is silent
-
-### A4 — Activity recreation preserves the runtime
-
-- [ ] Start a timeout and interval, record PID, runtime/context, HybridObject
-      and worker identities
-- [ ] Invoke actual `Activity.recreate()` without replacing the JS runtime
-- [ ] Verify the Activity identity changes while runtime/timer/worker stay the
-      same, and timeout/interval callbacks still arrive
-- [ ] Verify the timer is not disposed and its current wake lock/service demand
-      remains valid
-
-### A5 — Runtime reload cleans up old instances
-
-- [ ] Start timers and create a second raw HybridObject; record identities
-- [ ] Invoke a real `ReactHost.reload()` and verify a new runtime/context
-- [ ] Inspect old instances: disposed, workers terminated, timer maps/queue
-      empty, wake locks released and FGS demand removed
-- [ ] Verify new-runtime timeout/interval callbacks and current service demand
-- [ ] Repeat while manual dispose cleanup is pending; the new runtime must
-      follow completion of the old workers
-- [ ] Test explicit double/concurrent dispose and clear-before-fire
-
-Process kill is a separate OS resource-reclamation path and does not prove
-that a Java lifecycle callback ran. Fast Refresh alone is insufficient proof
-of runtime replacement.
-
-### A6 — SecurityException graceful fallback
-
-- [ ] Create a consumer manifest override that strips `WAKE_LOCK` via
-      `<uses-permission android:name="android.permission.WAKE_LOCK" tools:node="remove" />`
-- [ ] Build and run — verify no crash
-- [ ] Verify timer still fires
-- [ ] Verify warning log: `NitroBgTimer: WAKE_LOCK permission missing or revoked`
-
-### A7 — Wake lock release on natural completion
-
-- [ ] Start a 10-second `setTimeout`
-- [ ] After it fires, run `adb shell dumpsys power | grep -i nitrobgtimer`
-- [ ] Verify no wake lock held
-
-### A8 — Thread safety stress test
-
-- [ ] Start 50 concurrent `setTimeout` with random delays (100–5000 ms)
-- [ ] Verify all callbacks fire
-- [ ] Verify no errors in logcat
-- [ ] Verify wake lock released after the last one fires (via `dumpsys power`)
-
-### A9 — Callback-free fired-event delivery verification
-
-This closes the loop on the callback-free timer fire path: the worker
-`HandlerThread` records a fired timer event, native emits the timers-available
-signal, and JS drains the queue before invoking the callback stored in the
-public `BackgroundTimer` wrapper.
-
-- [ ] Start a single `BackgroundTimer.setTimeout(() => console.log('fired'), 1000)`
-- [ ] Verify the log appears in Metro and no JSI errors are printed
-- [ ] Verify no `Tried to access JS runtime from non-JS thread` error
-- [ ] Verify no generated Nitro callback-wrapper error is printed for timer
-      fire delivery
-
-### A10 — Implicit foreground service activation
-
-Default path: the consumer never calls `startBackgroundMode()`, and the
-library starts/stops the service automatically around active timers.
-
-- [ ] Grant `POST_NOTIFICATIONS` to the example app
-- [ ] Press "Start" in the Background Test section (no "Start BG Mode" press)
-- [ ] Verify the "Background Timer Active" notification appears in the shade
-- [ ] Verify current service state is foreground and belongs to the app PID
-- [ ] Press "Stop" — verify no owner demand, service or wake lock remains
-      after cleanup
-
-### A11 — Explicit background mode stays stable across timers
-
-- [ ] Press "Configure Notification" (sets a custom title/text)
-- [ ] Press "Start BG Mode" — verify the notification appears immediately
-      even without any active timer
-- [ ] Press "Start" to begin the Background Test — notification must stay
-      the same (no blink, no channel recreation)
-- [ ] Press "Stop" on the Background Test — notification must stay alive
-      (explicit mode still held)
-- [ ] Press "Stop BG Mode" — verify the notification disappears
-- [ ] Verify current owner demand, service state and notification identity
-      through start and stop, rather than inferring them from historical logs
-
-### A12 — Notification customization via `configure`
-
-- [ ] Press "Configure Notification" before starting any timer
-- [ ] Press "Start BG Mode"
-- [ ] Verify the notification shows "Workout in progress" as title and
-      "Background timers running" as text (values from the example app
-      configure call)
-- [ ] Press "Stop BG Mode", then "Start BG Mode" again — same custom
-      text should reappear (config persists across service stop/start
-      within the same process)
-
-- [ ] Repeat A → stop → configure B → start without waiting for physical
-      stop; inspect actual Notification title/text/icon/channel B
-- [ ] Repeat with implicit timers: clear A → configure B → schedule B while
-      worker cleanup is pending; verify B and unchanged channel policy
-
-### A13 — Background accuracy with foreground service (regression gate)
-
-This is the primary acceptance criterion for B9. Before B9, Background
-Test 3 on a Pixel 9 Pro XL stock Android showed Native ~78, Expected 100
-after 90s backgrounded with screen off (~10% drift). After B9, with the
-foreground service active, the drift must be near zero.
-
-- [ ] Press "Start BG Mode" (explicit mode, stable notification)
-- [ ] Press "Start" on Background Test 3
-- [ ] Background the app and lock the screen within 2 seconds
-- [ ] Wait 90 seconds on the lock screen (optionally: repeat the phone
-      while locked to ensure it doesn't dim off into Doze on first run)
-- [ ] Unlock, return to the app, press "Stop"
-- [ ] Verify `Native ≈ Expected` within 1-2 units (target: Native 89-91
-      when Expected is 90)
-- [ ] Repeat with "Stop BG Mode" pressed before backgrounding to confirm
-      the drift regresses to ~10% without the foreground service
-
-### A14 — POST_NOTIFICATIONS denied graceful fallback
-
-- [ ] Long-press the example app icon → App Info → Notifications →
-      disable all notifications, or revoke `POST_NOTIFICATIONS` via
-      `adb shell pm revoke com.nitrobgtimerexample android.permission.POST_NOTIFICATIONS`
-- [ ] Relaunch the example app, press "Start" on Background Test
-- [ ] Verify the app does not crash
-- [ ] Verify either the foreground service starts with the notification hidden
-      or `startForeground()` fails and the library logs a wake-lock-only
-      fallback
-- [ ] On API 34+, if the service cannot stay promoted, expect a
-      `Foreground service stopped`, service death, or fallback log line — this
-      is documented as a known limitation, not a bug
-
-### A15 — Long background run does not ANR (B11 regression gate)
-
-Purpose: verify that the foreground service does not crash with an ANR
-after 3 minutes (regression gate for the B11 fix that switched from
-`shortService` to `specialUse`).
-
-- [ ] Kill the example app, reinstall, reopen
-- [ ] Grant `POST_NOTIFICATIONS` permission if prompted
-- [ ] Tap **Start BG Mode** in the Background Test section
-- [ ] Verify the persistent notification appears
-- [ ] Tap **Start** on Background Test 3 to start a 1-second interval
-- [ ] Press the home button to background the app
-- [ ] Lock the screen
-- [ ] **Wait 5 minutes** (timed)
-- [ ] Unlock the screen and return to the app
-- [ ] Wait 5 seconds for JS counters to settle
-- [ ] Verify the timer is still running and accurate (Native ≈ Expected)
-- [ ] Check `adb logcat | grep -E "ANR|Short FGS"` — should show **no**
-      ANR or `Short FGS` messages for `com.nitrobgtimerexample`
-
-Expected: timer fires continuously for 5+ minutes without ANR,
-notification stays visible, Native and Expected counters remain aligned
-within 1-2 units.
-
-Failure mode if regressed: the app would crash with `Short FGS ANR'ed`
-followed by `ANR in com.nitrobgtimerexample` in logcat, and the example
-app would disappear from the recents.
-
-### A16 — Foreground service failure falls back cleanly
-
-This is partly a technical/instrumented scenario because Android does not
-offer a stable manual switch for every foreground-service failure mode.
-
-- [ ] Build a temporary consumer/app variant that removes
-      `NitroBackgroundTimerService` from the merged manifest but does **not**
-      call `BackgroundTimer.disableForegroundService()`
-- [ ] Start a timer — verify the app does not crash
-- [ ] Verify logcat contains a foreground-service start failure and
-      wake-lock-only fallback message
-- [ ] Verify the timer still fires, with the expected wake-lock-only timing
-      caveat
-- [ ] Clear the timer, then start another timer — verify the previous failed
-      start state does not suppress a future foreground-service start attempt
-- [ ] In a normal manifest build, stop the service from an in-app diagnostic
-      hook (the service is not exported); observe real `onDestroy`, then call
-      `startBackgroundMode()` again and verify a fresh active service
-- [ ] Exercise a real permitted OS start-refusal scenario, then retry from
-      foreground; bind both observations to the same process/runtime
-- [ ] For injected promotion failures, distinguish coordinator bookkeeping
-      from Android's foreground-start handshake; throwing before the platform
-      promotion can itself trigger a foreground-service timeout
-
-### A17 — `configure()` gating around accepted and cleared timers
-
-Use a temporary dev button/test harness or an instrumented test if the example
-app does not expose direct calls in this order.
-
-- [ ] Call `const id = BackgroundTimer.setTimeout(() => {}, 30000)`
-- [ ] Immediately call `BackgroundTimer.configure({ notification: { title: 'Late' } })`
-- [ ] Verify `configure()` throws an `Error` before the native timer has fired
-- [ ] Call `BackgroundTimer.clearTimeout(id)`, then immediately call
-      `configure()` again — verify it succeeds without waiting for native
-      cleanup to finish
-- [ ] Repeat with `const id = BackgroundTimer.setInterval(() => {}, 30000)`
-- [ ] Call `BackgroundTimer.clearInterval(id)`, then immediately call
-      `configure()` again — verify it succeeds without waiting for native
-      cleanup to finish
-
-### A18 — JS callback failure policy after callback-free native delivery
-
-Use a temporary dev button/test harness or a focused unit/integration test; a
-throwing callback can intentionally surface a JS error/RedBox.
-
-- [ ] Schedule a timeout whose callback throws a normal JS `Error`
-- [ ] Verify native timer delivery does not crash in a generated Nitro callback
-      wrapper; the error is surfaced from the JS drain path
-- [ ] Verify the timeout callback is removed after the throw and does not fire
-      again
-- [ ] Schedule an interval whose callback throws a normal JS `Error`
-- [ ] Verify the interval callback remains registered until explicitly cleared
-      by `BackgroundTimer.clearInterval(id)`
-
-### A19 — Foreground service STARTING pending-stop race (API 36 regression gate)
-
-Purpose: verify the Android foreground-service lifecycle fix for the race
-where a stop arrived while a foreground-service request was still `STARTING`.
-The fix avoids invalidating that request before `Service.onStartCommand()` can
-call `startForeground()`.
-
-- [ ] Use an Android API 36 physical device or emulator with the example app
-      installed and Metro running
-- [ ] Start a timer or explicit background mode, then clear/stop it quickly so
-      a stop can arrive while the service start is still in flight
-- [ ] Observe current STARTING_PENDING_STOP in a bounded diagnostic harness;
-      new demand must supersede the pending stop
-- [ ] Verify the service is allowed to call `startForeground()` and then stops
-      cleanly if there is no remaining demand
-- [ ] Verify no `ForegroundServiceDidNotStartInTimeException` appears in
-      logcat
-- [ ] Verify a later timer or explicit `startBackgroundMode()` call can start
-      the foreground service again
-
-### A20 — Shared foreground-service owners
-
-- [ ] Create two native HybridObjects with differing notification configs
-- [ ] Verify the earliest demanded owner supplies the one shared notification
-- [ ] Stop and dispose the first owner while the second has an interval;
-      verify the second's service, wake lock and timer remain valid
-- [ ] Verify notification takeover, then clear/dispose the final owner and
-      inspect service, workers, wake locks and demand registry for cleanup
-- [ ] Deliver delayed/stale starts and old-service destruction in a bounded
-      harness; current demand and notification must survive
-
-### A21 — Process opt-out
-
-- [ ] In a fresh process, disable FGS before scheduling; schedule timers and
-      repeat disable, verifying no throw and wake-lock-only delivery
-- [ ] Create another HybridObject and reload RN in the same process; opt-out
-      must persist, with no service demand or notification
-- [ ] In separate fresh processes, first disable after timer use (including
-      completed use) or another owner's active use must throw
-
-### A22 — Recurring interval floor (Android and iOS)
-
-- [ ] Exercise 0, 0.1, 0.5, 0.999, 1, 1.5, 2 and 10 ms plus an ordinary interval
-- [ ] Inspect native effective scheduling: sub-ms values use at least 1 ms;
-      values >=1 preserve each platform's existing conversion
-- [ ] Run finitely many short intervals; verify bounded/coalesced delivery,
-      successful clear, worker/run-loop progress and dispose cleanup
-- [ ] Verify one-shot timeout conversion/delivery is unchanged
-
-This checks a scheduling floor, not millisecond callback precision. Use finite
-runs on dedicated virtual devices; long physical-device stress is unnecessary.
-
-## iOS tests
-
-### I1 — Basic timer functionality
-
-- [ ] Same as A1
-
-### I2 — Background execution
-
-- [ ] Start a 25-second `setTimeout`, immediately background the app
-- [ ] After 25s, verify the callback fired
-- [ ] Note: iOS typically grants only limited background execution time
-      without explicit background modes; this is not an infinite background
-      guarantee
-
-### I3 — Dispose lifecycle
-
-- [ ] Same as A3
-
-### I4 — Bundle reload cleanup
-
-- [ ] Start a `setInterval`, then trigger a full React Native runtime reload
-- [ ] Record old/new runtime identities to prove the runtime was replaced
-- [ ] Verify old-instance timer/background-task cleanup; use
-      `[NitroBgTimer] debug: deinit triggered` as supporting evidence in debug
-      builds, alongside current resource observations
-
-### I5 — Background task expiration
-
-- [ ] Start a 60-second `setInterval` and background the app
-- [ ] After ~30s iOS fires the expiration handler
-- [ ] Verify no `0x8badf00d` watchdog crash
-- [ ] Verify `[NitroBgTimer] warn: Background task expiration handler fired`
-      appears in Xcode console
-
-### I6 — Expiration, foreground, second background reacquire
-
-- [ ] Start a long-running `setInterval`
-- [ ] Background the app and wait for the background task expiration log
-- [ ] Return the app to foreground
-- [ ] Background the app again while the interval is still active
-- [ ] Verify the app does not crash or hit a watchdog termination
-- [ ] In a debug build, verify the reacquire path logs that the app entered
-      background with active timers and no background task
-      (`didEnterBackground` observer path)
-- [ ] Call `clearInterval` or `dispose()` and verify the background task is
-      released / no further interval callbacks fire
-
-### I7 — Timeout cleanup after clear/dispose
-
-- [ ] Start a `setTimeout` long enough to clear manually
-- [ ] Immediately background the app, then call `clearTimeout` before it fires
-- [ ] Verify the callback never fires
-- [ ] Verify the background task is released if no timers remain
-- [ ] Repeat with `BackgroundTimer.dispose()` instead of `clearTimeout`
-- [ ] Verify dispose prevents late callback delivery and releases the
-      background task
-
-### I8 — Callback-free delivery on iOS
-
-The iOS timer fire path should not use generated Nitro callback wrappers for
-timer delivery. Native records fired timer events, emits the timers-available
-signal, and JS drains the queue through the public `BackgroundTimer` wrapper.
-
-- [ ] Run the automated core smoke on a physical iOS device and verify
-      `RESULT PASS`
-- [ ] Start a manual timeout and interval; verify callbacks run in JS
-- [ ] Verify no generated Nitro callback-wrapper error is printed for timer
-      fire delivery
-- [ ] Verify timeout cleanup behavior with normal clear/dispose paths instead
-      of relying on thrown JS errors as a guaranteed recoverable path
-
-### I9 — Stress test
-
-- [ ] Same as A8 (adapted for iOS)
-
-## Cross-platform regression tests
-
-### X1 — Long-running interval drift / platform limits
-
-- [ ] Android: start explicit background mode, start `setInterval` with
-      1000 ms, background the app for 10 minutes, and verify near-zero drift
-      while the foreground service notification remains active
-- [ ] Android: verify wake lock held throughout (via `dumpsys power`) and
-      released after `clearInterval`
-- [ ] iOS: do **not** treat 10 minutes of continuous background execution as a
-      required pass condition. Use I5/I6 to validate the limited
-      `beginBackgroundTask` window, expiration handling, best-effort reacquire,
-      and cleanup behavior
-
-### X2 — clearTimeout race
-
-- [ ] Start `setTimeout`, immediately call `clearTimeout` with same id
-- [ ] Verify callback never fires
-- [ ] Verify no wake lock / background task leak
-
-### X3 — Reuse after dispose
-
-- [ ] Call `BackgroundTimer.dispose()`
-- [ ] Full app reload (kill + relaunch) — verify the new instance works
-      normally (dispose is per-instance, not per-process)
-
-## Release sign-off
-
-Before tagging a release, the maintainer must:
-
-- [ ] Execute the full Android checklist on a physical device
-- [ ] Execute the full iOS checklist on a physical device
-- [ ] Verify all JS unit tests pass (`yarn test`)
-- [ ] Verify `yarn typecheck` and `yarn lint-ci` are clean
-- [ ] Document any skipped tests with reason in the release notes
+Restrict collected evidence to the example; inspect/redact before sharing.
+Missing WAKE_LOCK permission/acquisition failures are logged; native scheduling
+continues without that protection. Verify that branch with host/dedicated consumer
+evidence when relevant, not by modifying this example's manifest for routine QA.
+
+### A5 — Notification sessions and configure gating (F5)
+
+**Precondition:** No timers or explicit hold for the owner being configured.
+**Procedure:** Configure A → explicit start/stop → configure B → start; repeat with
+implicit timers C/D, then immediate pending-start/stop/reconfigure E.
+**Expected/observe:** Current notification title/text match each current session,
+including takeover after pending stop. `notification` automates these cases.
+Channel identity/user policy is separate; immutable existing channel properties
+are not expected to reset. Icon/channel selection requires its own observation.
+
+Use focused wrapper/native tests for accepted timer → configure rejection,
+immediate clear → configure success, and explicit hold gating. These assertions
+are not all proven by notification title checks alone. Configure is owner-scoped;
+another raw owner can still hold the shared service.
+
+### A6 — Multi-owner service coordination (F8)
+
+**Precondition:** Dedicated `multi-owner` adapter creates two distinct raw owners.
+**Procedure:** Observe both owners' events, release A while B has demand, then
+dispose A and finally release B. **Expected/observe:** Earliest demanded owner A
+supplies the one notification; B takes over and continues callbacks after A leaves;
+last release cleans up workers, service and locks. **Limit:** Raw adapter evidence
+is distinct from wrapper callbacks. Never look up/call a method on a raw proxy
+after disposal. Delayed stale-start/destruction races need bounded host/integration
+witnesses; UI alone does not expose coordinator state.
+
+### A7 — Process opt-out (F6)
+
+**Precondition:** Fresh process, before every owner's first timer/start request.
+**Procedure:** Use `optout` or separate UI opt-out flows. Disable, schedule timers,
+repeat disable and create a second owner. **Expected/observe:** Callbacks and
+wake-lock-only scheduling with no timer service; repeated opt-out does not throw.
+**Limit:** First opt-out after earlier use must throw, even after timers finish;
+prove that in separate fresh-process tests. Process scalars survive RN reload and
+new raw owners; a runtime reload cannot re-enable FGS. Those persistence branches
+are implemented but not all exercised by the `optout` scenario itself.
+
+### A8 — Start refusal/retry and pending-stop (F7)
+
+**Precondition:** Dedicated emulator or safe naturally restricted OS request,
+separate from ordinary phone testing. **Procedure:** `retry` attempts background
+start after the grace window, then retries from foreground. **Expected/observe:**
+Target-PID `ForegroundServiceStartNotAllowedException` between native control
+pulses, followed by current foreground notification/service request recovery.
+Without refusal the result is NOT_OBSERVED. The pulse is not a product callback.
+**Limit:** No synthetic failed-initial-promotion crash is required. Reset state or
+caught exceptions do not guarantee survival of Android's promotion deadline.
+Pending-stop sequencing is exercised by notification E and bounded host/native
+checks; absence of a crash alone does not prove every race was reached.
+
+### A9 — Queue backlog, callback errors and registration rollback
+
+**Precondition:** Fresh process and bounded test. **Procedure:** Physical QA
+`backlog` schedules 1,500 raw timeouts, blocks JS for 350 ms and validates the first
+drain's complete native/callback inventories. **Expected/observe:** All unique IDs,
+types/sequences and adapter callbacks; no intermediate drain or duplicate timeout.
+**Limit:** Dynamic memory scales with pending timeout events; this does not qualify
+the wrapper's automatic 1,500-event path. Intervals coalesce until drain.
+
+Use host Jest tests for F9 synchronous registration rollback and thrown-value
+propagation: failed registration leaves no callback entry; batch drain continues,
+then rethrows the first value, including falsy values. Timeout cleanup uses
+`finally`; an interval remains registered until clear. Do not deliberately throw
+uncaught callbacks on a personal phone as a required manual check.
+
+### A10 — Short intervals and bounded concurrency (F10)
+
+**Precondition:** Fresh process; finite durations. **Procedure:** `short-intervals`
+uses 0, 0.1, 0.5, 0.999, 1, 1.5, 2 and 10 ms, then clear/dispose. UI stress covers
+100 timers; core tests ordering/reentrancy. **Expected/observe:** Progress without
+freeze, bounded delivery and no post-clear/dispose callbacks. Inspect source or
+native-focused tests for exact conversions: Android truncates then floors at 1 ms;
+iOS floors at 1 ms while retaining larger fractions. **Limit:** Runtime callback
+counts do not directly measure effective native scheduling or real-time accuracy;
+timeout conversion is unchanged. Avoid long physical short-interval stress runs.
+
+## iOS manual and semi-automated scenarios
+
+### I1 — Standard timers, event delivery and cleanup
+
+**Precondition:** Fresh process, current native build and captured logs.
+**Procedure:** Run core, `timers`, UI main, or timeout/interval/cleanup sections.
+Clear before expiry, stop intervals, then run terminal dispose last.
+**Expected/observe:** Real JS callbacks, cancellation, reentrancy and no forbidden
+callbacks after clear/dispose; native signal → JS drain → wrapper delivery.
+**Limit:** Release private background-task IDs are not exposed; callback absence
+alone does not prove exact private task release timing. Debug `deinit` logging is
+supporting evidence, not the Android runtime-owner barrier.
+
+### I2 — Background delivery and suspension
+
+**Precondition:** Physical Release target, no debugger, initial active state and
+live host capture. **Procedure:** Use `background`; Home/SpringBoard, wait for the
+qualifying 25-second callback, then resume. **Expected/observe:** Own-process UIKit
+background event, JS AppState changes, callback received by host before resume,
+unchanged PID/artifact/container chain and successful return to active.
+**Limit:** A task grant is best-effort. Suspension/denial can prevent observation;
+a callback delivered only after resume does not prove background execution.
+Simulator/Debug success does not establish this physical contract.
+
+### I3 — Natural expiration and reacquire
+
+**Precondition:** Physical target, active long-running interval, finite observation
+window. **Procedure:** `expiration` waits for a natural expiration warning or up to
+75 seconds before resume, then checks timer progress. Do not assume expiration at
+30 seconds. For manual re-entry, after observed expiration/resume, background again
+with timers still active; observe the debug reacquire message where available.
+**Expected/observe:** Expiration ends only its matching identifier and preserves
+timer state; future background entry may request a new task. Clear/dispose ends
+remaining work. Record absence/presence of expiration and watchdog errors.
+**Limit:** No guaranteed time grant or continuous renewal. The automated scenario
+does not prove a second background reacquire cycle or full private task-ID/end
+timing. Full I05 qualification stays NOT_OBSERVED even when warning/resume progress
+is observed. Do not turn a partial natural observation into PASS.
+
+### I4 — Pending timeout clear and runtime disposal
+
+**Precondition:** Fresh app, callback IDs logged, pending timeout long enough to
+cancel. **Procedure:** Clear before fire, allow execution/resume and observe no
+callback; repeat in a fresh process with dispose. For full runtime reload, record
+old/new runtime identities and observe old callback absence/new usability.
+**Expected/observe:** Native main-queue invalidation, queued-event removal and task
+release when no timers remain; wrapper terminal guard prevents reuse.
+**Limit:** Calls return before all iOS native cleanup has necessarily executed.
+Do not use reload alone to claim direct observation of private task identifiers.
+
+### I5 — Backlog and short intervals
+
+**Precondition:** Fresh process, finite test budgets. **Procedure:** Use `backlog`
+and `short-intervals` separately. **Expected/observe:** First raw drain 1,500 unique
+timeouts with adapter callbacks; short values make progress and stop after clear.
+**Limit:** Raw adapter versus wrapper automatic delivery remains distinct. iOS
+uses the main run loop, so native execution depends on its availability; JS blockage
+does not imply arbitrary OS suspension can retain/fill all events. The interval
+floor is 1 ms, not an accuracy guarantee; fractional values >=1 ms are preserved.
+
+## Qualification record and release preparation
+
+For every selected lane, retain source/build receipts, artifact hashes, PID/runtime
+identity, callback IDs, wall/monotonic clocks, AppState/native lifecycle, command
+exits and cleanup observations. Use [PHYSICAL_QA.md](PHYSICAL_QA.md) for report
+layout, lock ownership, independent parser behavior and provenance limits.
+Historical selected runs must retain their failed predecessors and artifact deltas.
+
+Before a future release, maintainers should review relevant host/unit checks,
+package/consumer validation, physical scenarios and explicit gaps. Full checklist
+completion is not implied by this guide or a single exit 0. Report NOT_RUN and
+NOT_OBSERVED honestly; do not require every unobservable private contract to be
+claimed PASS. Version/tag/publication decisions are separate maintainer actions.

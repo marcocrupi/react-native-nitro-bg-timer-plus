@@ -7,19 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-15
+
+This minor release changes the required React Native/Nitro stack; review the
+pinned peers before upgrading from 0.3.3.
+
 ### Added
+
+- Added an example-only Android/iOS Release Physical QA runner, strict evidence
+  validator, device discovery, artifact/build receipts, target locks and host
+  regression fixtures. The committed runner still requires its historical
+  baseline; see PHYSICAL_QA.md before executing it on current main.
 
 ### Changed
 
+- Migrated the development/example stack to React Native 0.87.1, React 19.2.5,
+  Nitro Modules/Nitrogen 0.37.1 and TypeScript 5.9.3. Current RN/Nitro peers are
+  pinned to 0.87.1/0.37.1; Node engines are
+  `^22.13.0 || ^24.3.0 || >=26.0.0`.
+- Aligned Android/iOS native integration and generated bindings with the pinned
+  stack, including the Android prefab integration and example safe-area-context
+  5.10.1. Bob remains 0.41.0 and Yarn remains 4.6.0.
+- Hardened npm package builds through a Bob prepack build, dedicated
+  declaration build configuration and package/consumer regression checks.
+
 ### Fixed
+
+- F1: replaced native timeout queue eviction at 1,024 entries with a dynamic
+  pending-event queue on Android/iOS. Interval events still coalesce; pending
+  timeout memory scales with backlog.
+- F2/F3: bound Android timer cleanup to a ReactContext/runtime-owned TurboModule.
+  Retained-runtime Activity recreation preserves timers; invalidation disposes
+  owners, releases resources and waits for worker termination.
+- F5: snapshot current notification configuration across explicit/implicit
+  sessions and pending-stop transitions, subject to Android channel settings.
+- F6: made FGS opt-out idempotent and process-wide across native owners/runtime
+  reloads, with first-use gating retained.
+- F7: reset shared FGS state after recoverable start failures and allow a later
+  legitimate explicit/timer request to retry. Arbitrary failed initial promotion
+  or missed-handshake process survival is not guaranteed.
+- F8: coordinate multiple native owners of one Android FGS/notification; release
+  only the departing owner's demand and select the earliest remaining owner.
+- F9: roll back JS callback registration when native scheduling throws
+  synchronously. Drain callback errors preserve the first thrown value, including
+  falsy values, while completing batch processing and timeout cleanup.
+- F10: apply a native 1 ms minimum to recurring intervals below 1 ms on both
+  platforms, preserving existing larger-value conversion and timeout behavior.
+- F4: corrected package build/declaration/entrypoint validation with extracted
+  artifacts and isolated consumer checks.
 
 ### Testing
 
+- Hardened core/UI smoke identity, cancellation ordering, fresh-process/artifact
+  checks, target locks and rejection of stale/partial/error evidence.
+- Added Physical QA scenarios for callbacks, backlog, short intervals, Android
+  recreation/reload, notification sessions, opt-out, multi-owner FGS, background,
+  long-run, conditional refusal/retry and natural iOS expiration observation.
+- Retained artifact-specific Android/iPhone qualification records with explicit
+  gaps: F7 retry evidence on emulator, physical retry interrupted, iOS private task
+  release timing unobserved, raw-adapter backlog distinct from wrapper automatic
+  delivery, and Battery Saver/lock-unlock coverage incomplete. These are not
+  universal compatibility or store-distribution claims.
+
 ### Docs
 
-### Removed
-
-### Security
+- Reworked README, TESTING, PHYSICAL_QA, CONTRIBUTING and the example README
+  against current API/native behavior, requirements, lifecycle and OS limits.
+- Removed unsupported timing claims and documented tracked generated bindings,
+  release compatibility requirements and the historical QA gate.
 
 ## [0.3.3] - 2026-06-28
 
@@ -301,7 +356,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TypeScript API wrapper with callback management
 - Full API documentation and usage examples in README
 
-[Unreleased]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/compare/v0.3.0...v0.3.1

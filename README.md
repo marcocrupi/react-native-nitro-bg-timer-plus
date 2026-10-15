@@ -1,420 +1,362 @@
 # react-native-nitro-bg-timer-plus
 
-> A maintained fork of [react-native-nitro-bg-timer](https://github.com/tconns/react-native-nitro-bg-timer) by [Thành Công](https://github.com/tconns), continued as an independent project.
+A maintained, independent fork of [react-native-nitro-bg-timer](https://github.com/tconns/react-native-nitro-bg-timer)
+by [Thành Công](https://github.com/tconns), maintained by [Marco Crupi](https://github.com/marcocrupi).
 
 [![npm version](https://img.shields.io/npm/v/react-native-nitro-bg-timer-plus.svg)](https://www.npmjs.com/package/react-native-nitro-bg-timer-plus)
-[![npm downloads](https://img.shields.io/npm/dm/react-native-nitro-bg-timer-plus.svg)](https://www.npmjs.com/package/react-native-nitro-bg-timer-plus)
-[![license](https://img.shields.io/npm/l/react-native-nitro-bg-timer-plus.svg)](https://github.com/marcocrupi/react-native-nitro-bg-timer-plus/blob/main/LICENSE)
-[![platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android-blue.svg)](https://github.com/marcocrupi/react-native-nitro-bg-timer-plus)
+[![license](https://img.shields.io/npm/l/react-native-nitro-bg-timer-plus.svg)](LICENSE)
 
-Native background timer for React Native built with Nitro Modules.
+Native timeout and interval scheduling for Android and iOS, built with Nitro
+Modules. Application callbacks run in JavaScript; background execution depends
+on the time and resources the operating system grants your app.
 
-## Overview
-
-This module provides high-performance timer functionality for React Native
-applications that need background-aware `setTimeout` / `setInterval`
-behavior. Background execution is implemented with platform-specific native
-mechanisms and remains subject to Android and iOS operating-system limits.
-
-## Features
-
-- ⚡ High-performance native implementation using Nitro Modules
-- 🎯 Background-safe timers (`setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`)
-- 🔄 Background-aware scheduling with platform-specific limits
-- 📱 Cross-platform support (iOS & Android)
-- 🚀 Zero-bridge overhead with direct native calls
-- 🛡️ Explicit `dispose()` and Android runtime-scoped cleanup across React Native reloads
-- 🎯 Near-zero drift on Android while the foreground service is active (implicit fallback, or explicit `startBackgroundMode` / `stopBackgroundMode` for long sessions)
-- 🔔 Customizable persistent notification via `configure()` (title, text, icon, channel)
-- 🔒 Synchronized native lifecycle and service ownership; serialized timer runnables
-- 🛡️ Graceful fallback if `WAKE_LOCK` permission is missing — no crash, just a warning
-- ✅ 56 unit tests + manual release checklist
+This README describes **version 0.4.0**. See the [release notes](CHANGELOG.md#040---2026-10-15)
+for changes since 0.3.3, including the required React Native/Nitro upgrade.
+Use the documentation from the matching tag when consuming another version.
 
 ## Requirements
 
-- React Native >= 0.76
-- Node >= 18
-- `react-native-nitro-modules` must be installed (Nitro runtime)
+The current [manifest](package.json) declares:
+
+| Dependency/tool | Requirement |
+| --- | --- |
+| React Native peer | `0.87.1` |
+| Nitro Modules peer | `0.37.1` |
+| React peer | `*` (development/example use `19.2.5`) |
+| Node | `^22.13.0 \|\| ^24.3.0 \|\| >=26.0.0` |
+| Repository package manager | Yarn `4.6.0` |
+
+Use a native React Native application with the **New Architecture**. The current
+RN 0.87.1 example is the integration target; other RN/Nitro versions and Old
+Architecture are not declared supported by this revision. The Android library
+has a default minimum SDK of 24; the host RN/toolchain can impose stricter
+requirements. The iOS podspec uses React Native's `min_ios_version_supported`.
+A podspec visionOS declaration is not visionOS runtime qualification.
+
+Declared peers are distinct from tested configurations. Physical QA covers
+specific Android/iPhone artifacts and scenarios, with gaps documented in
+[PHYSICAL_QA.md](PHYSICAL_QA.md#qualification-boundaries). It does not establish
+compatibility with every device, OS version, power mode or store distribution.
 
 ## Installation
 
-```bash
-npm install react-native-nitro-bg-timer-plus react-native-nitro-modules
-# or
-yarn add react-native-nitro-bg-timer-plus react-native-nitro-modules
+Install the package and its pinned Nitro runtime peer in a React Native `0.87.1` app:
+
+```sh
+npm install react-native-nitro-bg-timer-plus@0.4.0 react-native-nitro-modules@0.37.1
+# Or:
+yarn add react-native-nitro-bg-timer-plus@0.4.0 react-native-nitro-modules@0.37.1
 ```
 
-## Upgrading from 0.2.0
+For a local package build, replace the package spec with the generated
+`react-native-nitro-bg-timer-plus-0.4.0.tgz` path. See
+[contributor package checks](CONTRIBUTING.md#checks-by-change-type).
 
-If you are upgrading an existing project from `0.2.0`, your code
-continues to work without modification — no breaking API changes. You
-will, however, notice two new runtime behaviors:
+Autolinking includes the native library and generated Nitro bindings. Consumers
+do not run Nitrogen or manually register the package. Rebuild your native app
+after installation; restarting Metro alone cannot load a new native module.
+For iOS, install Pods using your application's Ruby/Bundler environment:
 
-1. **A persistent notification appears while timers are active in
-   background.** This is the foreground service used for near-zero
-   drift while Android allows it to run. See
-   [Background Mode (Android)](#background-mode-android).
+```sh
+cd ios
+bundle exec pod install
+```
 
-2. **On Android 13+, you must request the `POST_NOTIFICATIONS`
-   runtime permission** for the persistent notification to appear.
-   Without it, the notification may be hidden. On newer Android
-   versions, `startForeground()` can also fail if the service cannot
-   be promoted; in that case the library falls back to wake-lock-only
-   mode with less precise background timing. Add a permission request
-   to your app's onboarding flow — a ready-to-paste snippet is in the
-   [Required permissions](#required-permissions) section.
+If your app does not use Bundler, use its established CocoaPods workflow. See
+[Nitro installation](https://github.com/margelo/nitro/blob/main/docs/docs/resources/for-library-users.md).
+The base iOS timer mechanism needs no `UIBackgroundModes` entry.
 
-If you prefer the 0.2.0 behavior (no foreground service, wake-lock-only
-background timers with higher drift), call
-`BackgroundTimer.disableForegroundService()` once at app startup. For
-apps that also want to remove the foreground service declaration from
-the merged manifest, pair that runtime opt-out with the manifest removal
-documented in [Disabling the foreground service](#disabling-the-foreground-service).
+On Android, the library manifest merges `WAKE_LOCK`, `FOREGROUND_SERVICE`,
+`FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`, and a non-exported
+`specialUse` service into the app. Review the merged manifest for your build.
+Your app owns the Android 13+ notification permission request; the library
+does not display that permission dialog itself. See [Android background mode](#android-background-mode).
 
-## Platform Configuration
-
-### iOS
-
-No special configuration is required for the library's base iOS behavior.
-The module uses `UIApplication.beginBackgroundTask` as a best-effort
-mechanism when timers are active. iOS grants only limited background
-runtime, and it may expire that task; when expiration fires, the library
-ends the expired background task but preserves its internal timer state.
-If the app later enters background again with active timers, the library
-attempts to acquire a new background task.
-
-This does **not** guarantee infinite background execution on iOS. Actual
-timer delivery depends on the runtime iOS allows for the app. No entries
-in `UIBackgroundModes` are needed for the base timer behavior described
-here.
-
-### Android
-
-The library's manifest declares all the permissions it needs, and they
-are merged automatically into your app at build time. You do not need
-to add anything to your own `AndroidManifest.xml`:
-
-- `android.permission.WAKE_LOCK`
-- `android.permission.FOREGROUND_SERVICE`
-- `android.permission.FOREGROUND_SERVICE_SPECIAL_USE` (Android 14+)
-- `android.permission.POST_NOTIFICATIONS` (Android 13+)
-
-There is, however, **one thing you should do yourself** if your app
-targets Android 13 or later: request the `POST_NOTIFICATIONS` runtime
-permission from the user as part of your onboarding flow. Without it,
-the persistent notification may be hidden. Recoverable foreground-service
-start refusals leave timers on wake-lock-only scheduling while the process
-remains alive; see the service limitations below.
-
-See the [Background Mode (Android)](#background-mode-android) section
-below for the full picture of what the foreground service does, when
-it activates, and how to customize it. If you are upgrading from
-`0.2.0`, also read the [Upgrading from 0.2.0](#upgrading-from-020)
-section.
-
-If `WAKE_LOCK` has been explicitly removed from the merged manifest
-(for example via `tools:node="remove"`), the module logs a warning and
-runs timers via the handler thread without a wake lock — no crash.
-
-## Quick Usage
+## Quick start
 
 ```ts
 import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 
-// setTimeout - runs once after delay
 const timeoutId = BackgroundTimer.setTimeout(() => {
-  console.log('This runs after 5 seconds when background execution is allowed!')
+  console.log('Timeout delivered')
 }, 5000)
 
-// Clear timeout if needed
-BackgroundTimer.clearTimeout(timeoutId)
-
-// setInterval - runs repeatedly
 const intervalId = BackgroundTimer.setInterval(() => {
-  console.log('This runs every 2 seconds while background execution is allowed!')
-}, 2000)
-
-// Clear interval when done
-BackgroundTimer.clearInterval(intervalId)
-```
-
-### Important — Android background behavior
-
-When a timer is active and your app moves to background, this library
-automatically starts a foreground service that keeps your host
-process at foreground scheduling priority. While that foreground service
-is active, Android background timer drift is near zero on validated stock
-devices. Without the service, the library falls back to wake-lock-only
-execution and `setInterval` can drift by roughly 10% in background.
-
-The side effect is that your users will see a **persistent notification**
-in the notification shade for as long as a timer is running. The
-notification appears automatically on the first active timer and
-disappears when the last timer completes. You can customize its title,
-text, and icon via `BackgroundTimer.configure()`, and you can control
-its lifecycle explicitly with `startBackgroundMode()` /
-`stopBackgroundMode()` to avoid "blinking" if your app creates many
-short consecutive timers.
-
-This behavior is **Android-only**. On iOS, the library uses
-`beginBackgroundTask` as a limited, best-effort background execution
-mechanism and does not need a foreground service.
-
-See the [Background Mode (Android)](#background-mode-android) section
-for details, including how to request the required
-`POST_NOTIFICATIONS` runtime permission.
-
-## API Reference
-
-### BackgroundTimer
-
-The main API object providing background-safe timer functionality.
-
-The public `BackgroundTimer` API is unchanged: application code still passes
-callbacks to `BackgroundTimer.setTimeout()` and
-`BackgroundTimer.setInterval()`, and receives numeric timer IDs for clearing.
-Internally, those callbacks stay in the JS wrapper. Native code records fired
-timer events in a small queue and emits a signal; the JS wrapper drains that
-queue and invokes the matching JS callbacks. The low-level Nitro object and
-its `drainFiredTimers()` method are implementation details and are not the
-recommended app-facing API.
-
-#### `setTimeout(callback: () => void, duration: number): number`
-
-Creates a timer that calls the callback function after the specified duration.
-
-- **callback**: Function to execute after the timer expires
-- **duration**: Time in milliseconds to wait before executing the callback
-- **Returns**: Timer ID that can be used with `clearTimeout`
-
-```ts
-const id = BackgroundTimer.setTimeout(() => {
-  console.log('Timer executed!')
-}, 3000)
-```
-
-#### `clearTimeout(id: number): void`
-
-Cancels a timeout timer created with `setTimeout`.
-
-- **id**: Timer ID returned from `setTimeout`
-
-```ts
-const id = BackgroundTimer.setTimeout(() => {
-  console.log('This will not run')
-}, 5000)
-
-BackgroundTimer.clearTimeout(id) // Cancel the timer
-```
-
-#### `setInterval(callback: () => void, interval: number): number`
-
-Creates a timer that repeatedly calls the callback function at specified intervals.
-
-- **callback**: Function to execute on each interval
-- **interval**: Time in milliseconds between each execution
-- **Returns**: Timer ID that can be used with `clearInterval`
-
-```ts
-const id = BackgroundTimer.setInterval(() => {
-  console.log('Repeating timer!')
-}, 1000) // Runs every second
-```
-
-#### `clearInterval(id: number): void`
-
-Cancels an interval timer created with `setInterval`.
-
-- **id**: Timer ID returned from `setInterval`
-
-```ts
-const id = BackgroundTimer.setInterval(() => {
-  console.log('This will stop after 10 seconds')
+  console.log('Interval delivered')
 }, 1000)
 
-// Stop the interval after 10 seconds
-BackgroundTimer.setTimeout(() => {
-  BackgroundTimer.clearInterval(id)
-}, 10000)
+// Call when this feature finishes, before a pending callback is needed:
+function cleanupTimers(): void {
+  BackgroundTimer.clearTimeout(timeoutId)
+  BackgroundTimer.clearInterval(intervalId)
+}
 ```
 
-#### `dispose(): void`
-
-Eagerly disposes all native resources held by the background timer (wake
-lock / background task, pending runnables, worker thread). Calling `dispose()`
-is **not** required for correct cleanup in normal usage — see
-[Lifecycle and cleanup](#lifecycle-and-cleanup) below for the full picture.
-
-After calling `dispose()`, the `BackgroundTimer` instance is **permanently
-unusable**:
-
-- `setTimeout` / `setInterval` throw an `Error`.
-- `clearTimeout` / `clearInterval` are silent no-ops.
-- `dispose()` itself is idempotent — calling it twice is safe.
+In a React component, clear the timers created by that effect:
 
 ```ts
-BackgroundTimer.dispose()
+import { useEffect } from 'react'
+import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
+
+export function useTimerLog(): void {
+  useEffect(() => {
+    const timeout = BackgroundTimer.setTimeout(() => console.log('Once'), 5000)
+    const interval = BackgroundTimer.setInterval(() => console.log('Tick'), 1000)
+    return () => {
+      BackgroundTimer.clearTimeout(timeout)
+      BackgroundTimer.clearInterval(interval)
+    }
+  }, [])
+}
 ```
 
-Intervals accept finite nonnegative milliseconds. Accepted values below
-1 ms, including zero, use a minimum native recurring delay of 1 ms on Android
-and iOS. Existing conversions for values at or above 1 ms are preserved:
-Android schedules whole milliseconds, while iOS retains fractional milliseconds.
-OS scheduling and event coalescing can delay callbacks; this floor provides no
-real-time precision guarantee. Timeout scheduling is unchanged.
+The exported `BackgroundTimer` is a shared wrapper, not a per-component instance.
+Use clear methods for ordinary feature cleanup. `dispose()` permanently ends the
+whole wrapper's lifetime and affects every feature using it.
+
+## API reference
+
+Import the named `BackgroundTimer` export. All durations are milliseconds.
+All methods other than scheduling return `void`, not a Promise or a service
+success receipt. Native setup/interop errors can propagate; a scheduling ID
+acknowledges the wrapper call, not OS permission to execute in background.
+
+### `setTimeout(callback: () => void, duration: number): number`
+
+Registers a callback and returns its numeric ID. `callback` must be a function
+(`TypeError` otherwise); `duration` must be a finite, nonnegative number
+(`RangeError` otherwise). A disposed wrapper throws `Error` before validation.
+If native registration throws synchronously, the callback registration is rolled
+back and that error is rethrown (F9).
+
+Android posts to its worker using `duration.toLong()` milliseconds, truncating
+fractional values. iOS uses a main-run-loop `Timer` with `duration / 1000`
+seconds. Zero is accepted; neither platform guarantees immediate delivery.
+A delivered timeout is removed even if its callback throws.
+
+### `clearTimeout(id: number): void`
+
+Pass the ID returned by `setTimeout`. Removes its JS callback and requests native
+cancellation/queued-event removal on Android or iOS. Repeating a clear or clearing
+an unknown ID is harmless for normal numeric IDs. The wrapper does not validate
+IDs; do not pass arbitrary values. After wrapper disposal this is a silent no-op.
+Cancellation cannot interrupt a callback already executing.
+
+### `setInterval(callback: () => void, interval: number): number`
+
+Registers a recurring callback and returns its numeric ID. Validation, disposed
+errors and synchronous registration rollback match `setTimeout`.
+
+Both platforms apply a **1 ms native minimum** to interval values below 1 ms,
+including zero (F10). For values at or above 1 ms, Android truncates to whole
+milliseconds; iOS retains the fractional millisecond value. For example, `1.5`
+uses 1 ms on Android and 1.5 ms on iOS. This is a scheduling floor, not a guarantee
+of 1 ms precision. Timeout scheduling does not use this interval floor.
+Intervals coalesce pending native events; missed ticks are not an elapsed-time
+counter. Clear an interval explicitly, including after a callback error.
+
+### `clearInterval(id: number): void`
+
+Pass the ID returned by `setInterval`. Removes its JS callback and requests
+native cancellation/queued-event removal on both platforms. Repeated or unknown
+numeric IDs are harmless; IDs have no wrapper validation. Silent no-op after
+disposal. Cannot preempt a running callback.
+
+### `dispose(): void`
+
+Idempotently marks the wrapper disposed, clears callback maps, removes its event
+subscription and invokes native disposal. Android cleanup releases this owner's
+FGS demand and wake lock, clears work and queues, and terminates its worker.
+iOS dispatches cleanup to the main queue, invalidates timers, removes its observer
+and ends its background task. Return from this method is not a synchronous
+cross-platform resource-settlement receipt.
+
+After disposal, `setTimeout`, `setInterval`, `configure` and
+`startBackgroundMode` throw `Error`; clear methods, `stopBackgroundMode` and
+repeated `dispose` are no-ops. There is no public reset/reinitialize method.
+A fresh runtime/application can create a fresh wrapper. Android process-wide
+FGS opt-out is a separate lifetime described below.
+
+### `configure(config: BackgroundTimerConfig): void`
+
+```ts
+interface BackgroundTimerNotificationConfig {
+  title?: string
+  text?: string
+  channelId?: string
+  channelName?: string
+  iconResourceName?: string
+}
+interface BackgroundTimerConfig {
+  notification?: BackgroundTimerNotificationConfig
+}
+```
+
+These types are exported. All notification fields are optional. Defaults are
+`Background Timer Active`, `Tap to return to the app`, `nitro_bg_timer_channel`,
+and `Background Timer` respectively. `iconResourceName` names an app drawable;
+missing/unresolved icons fall back to the launcher icon, then a system icon.
+
+Android rejects configuration while **that owner** has an explicit request or
+uncleared accepted/pending/active timers. Clear all its timers and stop its
+explicit request first. IDs marked pending-clear no longer block configuration,
+so immediate clear → configure → schedule is supported. New sessions snapshot
+the current config (F5). Empty/missing notification fields use defaults.
+This is not a live-edit API for an active session.
+
+On iOS the native operation is a no-op. The JS wrapper still serializes the
+argument with `JSON.stringify(config ?? {})` on both platforms; non-serializable
+input can throw. Both platforms throw `Error` if the wrapper is disposed.
+Android native gating errors propagate to JS; malformed raw JSON is logged and
+ignored by native code, not exposed as a supported input contract.
+
+### `startBackgroundMode(): void`
+
+Android requests an explicit service hold, including when there are no timers.
+Repeated calls while pending/active do not add holds. A later request can retry
+a recoverable failed start. When process opt-out has succeeded, native start is
+a no-op. iOS: native no-op; it does not extend the background-task budget.
+Both platforms throw `Error` if the wrapper is disposed.
+
+### `stopBackgroundMode(): void`
+
+Android releases this owner's explicit hold. Active timers retain implicit demand;
+other owners can also retain the shared service. Repeated calls and calls after
+wrapper disposal are no-ops. iOS: no-op. It does not cancel timers.
+
+### `disableForegroundService(): void`
+
+Android process-wide, irreversible opt-out (F6). The **first** successful call
+must precede any timer acceptance or explicit background request across every
+native owner in the process. A first call after such use throws, even when those
+timers have finished. After successful opt-out, repeated calls are no-ops,
+including with active wake-lock-only timers. It survives new HybridObjects and
+RN runtime reloads; only a fresh process without opt-out can enable FGS again.
+
+iOS: no-op. Unlike configure/start, the wrapper has no disposed guard for this
+method: it always forwards to the native object. Android's native implementation
+ignores it on a disposed object. Do not rely on raw Nitro access after disposal;
+make opt-out decisions at process startup.
+
+### Low-level export
+
+`NitroBackgroundTimer` is also exported: the raw HybridObject backing the wrapper.
+Its spec accepts numeric IDs plus durations, has the Android configuration method
+`configure(configJson: string)`, the background-mode methods, and
+`drainFiredTimers(): FiredTimerEvent[]`. Events contain `id`, `type` (timeout 0,
+interval 1) and `sequence`; `dispose()` is inherited from Nitro's HybridObject.
+It has no application callback registry or wrapper validation. The event types
+are defined in [the spec](src/specs/NitroBackgroundTimer.nitro.ts), not re-exported
+as named types from the package entry point. Prefer `BackgroundTimer` for apps.
+Do not drain its raw object yourself: that can consume events before the wrapper.
+Raw Nitro proxies must not be accessed after disposal, including for a second
+method lookup. The wrapper's idempotent disposal guard is a separate contract.
+
+## Native event delivery
+
+Native Android runnables / iOS timers append fired events and send a
+`NitroBackgroundTimerTimersAvailable` signal through React Native's event emitter.
+The JS wrapper drains native events and invokes the callbacks held in its maps.
+Nitro calls do not mean application callbacks execute off the JS thread.
+
+F1 replaces the former 1,024-entry eviction behavior with a dynamic queue:
+expired timeouts are not intentionally discarded at that old threshold. Memory
+is proportional to pending events; this is not a constant-memory queue or a
+persistent delivery mechanism. At most one event per interval ID remains pending
+until drained. Clear removes callbacks and queued native events; dispose empties
+the owner's queue. A blocked JS thread delays application callbacks; a suspended
+app or terminated process cannot be promised delivery. The queue records actual
+native fires, not every theoretical deadline missed while the OS suspended timers.
+
+A drain continues processing its batch when a callback throws and rethrows the
+first thrown value after processing. Timeout callbacks are removed in `finally`;
+interval callbacks remain until cleared. Handle application errors inside your
+callbacks; the timer is not a universal error boundary. Async callback results
+are not awaited, so manage rejected promises and overlapping work yourself.
 
 ## Lifecycle and cleanup
 
-On **Android**, an internal TurboModule owns the native timer instances for
-one React Native runtime. When the runtime is retained, Activity recreation
-preserves its timers. Runtime invalidation disposes all registered instances, releases their
-wake locks and foreground-service demand, and waits for their workers to
-terminate. Raw HybridObjects remain owned until explicit disposal or runtime
-invalidation, including instances whose JavaScript references were dropped.
+| Event | Expected boundary |
+| --- | --- |
+| Home / Resume | Does not itself dispose timers; execution is subject to OS policy. |
+| Android Activity recreation | Preserves timers when the same JS runtime/ReactContext remains alive (F2). |
+| Android `ReactHost.reload()` | Replaces the runtime; its TurboModule owner invalidates and disposes registered timer objects (F3). |
+| Android `ReactHost.destroy()` | Runtime invalidation uses the same cleanup path; this is distinct from Activity destruction. |
+| Fast Refresh | Can retain the runtime; does not prove native teardown. Clear feature timers in effect/unmount cleanup. |
+| Explicit `dispose()` | Terminal wrapper cleanup; use only when all users of the singleton are finished. |
+| Process termination | OS reclaims process resources; Java/JS/Swift cleanup callbacks are not guaranteed to run. Timers are not persisted. |
 
-`BackgroundTimer.dispose()` starts native cleanup earlier and permanently
-marks the wrapper unusable. Android cleanup runs on the timer worker; runtime
-invalidation also waits for pending manual cleanup to finish. On **iOS**,
-explicit disposal and `deinit` invalidate timers and end the background task.
-The iOS lifecycle implementation is unchanged.
+The Android owner is tied to the captured ReactContext, not an Activity or a
+later global context. Runtime invalidation disposes its objects and waits for old
+workers, including manual disposal already in flight, before returning. Cleanup
+releases per-owner wake locks and shared-service demand. Dropping a raw JS
+reference alone does not terminate a runtime-owned Android worker. GC/finalizers
+are fallback mechanisms, not deterministic feature cleanup.
 
-Clear individual timers when their owning feature finishes. Use `dispose()`
-when the whole singleton is finished. `dispose()`, lifecycle cleanup,
-`clearTimeout`, and `clearInterval` prevent future callbacks but cannot preempt
-a callback already executing in user code. Process termination is handled by
-the OS; lifecycle callbacks are not guaranteed during process death.
+On iOS, explicit disposal and `deinit` invalidate timers and end the background
+task. Do not equate Android's runtime-owner barrier with an independently observed
+iOS private-task teardown barrier.
 
-### Development: Fast Refresh and runtime reload
+## Android background mode
 
-Fast Refresh may update modules while preserving the runtime. Clean up timers
-in the feature's effect/unmount path as appropriate. A full React Native
-runtime reload invokes the Android runtime owner's invalidation and resource
-barrier, independently of Activity recreation or garbage collection.
-
-## Background Mode (Android)
-
-On Android, background processes are throttled by the `bg_non_interactive`
-cgroup, which limits CPU quota and causes `setInterval` / `setTimeout`
-ticks to drift by roughly 10% even with a partial wake lock and a
-foreground-priority worker thread. To reduce that drift, this library can
-run a **foreground service** that keeps the host process at foreground
-scheduling priority while timers are active.
-
-The foreground service activates in two modes:
-
-**Implicit (default)** — when the consumer does not call any background
-mode API, the service is started automatically on the first active timer
-and stopped when the last timer completes. The consumer sees a persistent
-notification in the notification shade only while a timer is running.
-Existing code written for older versions of this library continues to
-work unchanged.
-
-**Explicit (recommended for long sessions)** — for known critical
-sessions like a workout, a recording, or a GPS tracking session, call
-`startBackgroundMode()` at the start and `stopBackgroundMode()` at the
-end. The notification stays stable for the entire session instead of
-appearing and disappearing around individual timers.
+Timers request the FGS **when accepted**, including in foreground; it is not
+started only after Home. Implicit demand ends when the owner's final timer
+finishes/is cleared. Explicit mode holds demand across gaps between timers:
 
 ```ts
 import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
 
-// At the start of a workout session
-BackgroundTimer.startBackgroundMode()
-
-// Schedule timers normally during the session
-const restTimerId = BackgroundTimer.setTimeout(() => {
-  // rest period over
-}, 90_000)
-
-// At the end of the session
-BackgroundTimer.stopBackgroundMode()
-```
-
-Both methods are idempotent and are **no-ops on iOS**. iOS uses
-`beginBackgroundTask` for limited best-effort background runtime; timers
-are preserved internally, but continued background execution depends on
-the time the system grants. You can write cross-platform code that calls
-these methods on both platforms without a platform branch.
-
-The Android service is shared across native timer instances. Each instance
-holds demand while explicit background mode or its timers remain active.
-Stopping or disposing one instance releases only its demand; the service stops
-after the final owner releases it. Wake locks remain per instance.
-
-There is one shared notification. The earliest owner still holding service
-demand supplies its configuration; when it leaves, the earliest remaining
-owner takes over. Each owner retains its own configuration for future sessions.
-
-`startBackgroundMode()` returns `void` and requests a session. Recoverable
-Android start refusals are logged; timers continue with the wake-lock fallback
-while the process remains alive. A subsequent explicit call or newly scheduled
-timer can request another start.
-Repeated requests while a start is pending or active are idempotent. There is
-no automatic retry loop, and Android can reject a later attempt as well.
-Platform promotion errors or a missed foreground-start deadline can terminate
-the process; the library does not contain every foreground-service failure.
-
-### Customizing the notification
-
-Call `configure()` **before** the first timer is accepted/scheduled and
-before `startBackgroundMode()` to customize the notification appearance.
-All fields are optional — omitted fields fall back to sensible generic
-defaults.
-
-```ts
 BackgroundTimer.configure({
   notification: {
-    title: 'Workout in progress',
-    text: 'Tracking your rest timers',
-    channelId: 'my_app_workout_channel',
-    channelName: 'Workout Tracking',
-    iconResourceName: 'ic_workout',
+    title: 'Timer session',
+    text: 'A timer session is active',
+    channelId: 'timer_sessions',
+    channelName: 'Timer sessions',
   },
 })
+BackgroundTimer.startBackgroundMode()
+const timer = BackgroundTimer.setInterval(() => console.log('Tick'), 1000)
+
+function endSession(): void {
+  BackgroundTimer.clearInterval(timer)
+  BackgroundTimer.stopBackgroundMode()
+}
 ```
 
-`configure()` throws if called while explicit background mode is requested
-or while any timer is accepted, pending, or active. Call it early in your
-app lifecycle (e.g. at startup or right before the user enters the
-critical screen), never mid-session.
+Configure before starting and request from a legitimate user-visible context.
+Multiple native owners share one service and notification (F8). The earliest
+owner still holding demand supplies the notification snapshot. When it leaves,
+the earliest remaining owner takes over; disposing one must not stop another's
+demand. Wake locks are per owner and tied to timers, not an explicit hold alone.
 
-After `clearTimeout()` or `clearInterval()` clears the last accepted timer,
-`configure()` can be retried immediately. Android treats IDs already being
-cleared as no longer blocking configuration while native cleanup finishes.
-A subsequent explicit or implicit session uses the new title, text, icon and
-channel selection even if the previous physical stop is pending. Existing
-Android notification channels still follow the platform's channel settings.
+The coordinator handles pending stop/start races and subsequent configuration
+sessions. Notification title/text/icon/channel selection follow current demand;
+creating an existing channel does not retroactively change immutable channel
+settings or override user choices. See [Android notification channels](https://developer.android.com/develop/ui/compose/notifications/channels).
 
-### Required permissions
+Recoverable `startForegroundService` refusals reset start state; a subsequent
+explicit or timer request can retry (F7). There is no automatic retry loop.
+While the process is alive, timers can use the wake-lock fallback. A failed
+initial `startForeground` promotion or missed handshake can still cause Android
+to terminate the process; catching an exception is not proof of survival.
+[Background-start restrictions](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)
+still apply. The service returns `START_NOT_STICKY`, not a persistence guarantee.
 
-The library's own manifest declares everything the foreground service
-needs — you do not have to add permissions to your app's manifest for
-this to work:
+`WAKE_LOCK` is acquired non-reference-counted while timers remain and released
+after completion, clear or cleanup. Missing permission/acquisition failures are
+logged and timers continue without that protection. A wake lock does not grant
+unlimited process or JS execution. FGS does not guarantee exact timing or survival
+under every power, memory or OEM policy.
 
-- `android.permission.WAKE_LOCK`
-- `android.permission.FOREGROUND_SERVICE`
-- `android.permission.FOREGROUND_SERVICE_SPECIAL_USE` (API 34+)
-- `android.permission.POST_NOTIFICATIONS` (API 33+)
+### Notifications and opt-out
 
-`POST_NOTIFICATIONS` is a **runtime permission** starting on Android 13,
-and your app must request it from the user before the foreground service
-notification can appear. The library intentionally does not request this
-permission for you — most apps already have a notification permission
-flow as part of their onboarding, and silently triggering the system
-dialog from a timer library would be surprising.
-
-If the permission is denied, the foreground service notification may be
-hidden. Notification visibility and successful service promotion are separate
-observations. Recoverable start refusals can use wake-lock-only scheduling;
-platform promotion failures remain subject to Android's process rules. Request
-the permission yourself so users can see that a timer is active:
+On Android 13+, request notification permission through your app's existing flow:
 
 ```ts
 import { PermissionsAndroid, Platform } from 'react-native'
 
-async function ensureNotificationPermission() {
-  if (Platform.OS !== 'android') return
-  if (typeof Platform.Version === 'number' && Platform.Version >= 33) {
+export async function requestTimerNotificationPermission(): Promise<void> {
+  if (Platform.OS === 'android' && Platform.Version >= 33) {
     await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
     )
@@ -422,621 +364,101 @@ async function ensureNotificationPermission() {
 }
 ```
 
-### Limitations
+Permission denial/notification visibility and successful service promotion are
+separate observations. Inspect service state rather than infer it from the shade.
 
-- The foreground service uses Android 14's `specialUse` foreground
-  service type. There is **no platform-imposed time limit** on how
-  long the service can run, but on Android 14+ your app must declare
-  the `specialUse` subtype in the Play Console during review (see
-  "Play Store review notes" below).
-- Aggressive OEM battery savers (Xiaomi, Huawei, Oppo, Samsung with
-  restrictive power management profiles, etc.) may still kill
-  background services regardless of foreground service type. Ask
-  users to whitelist your app in the device battery optimization
-  settings.
-- Recoverable `startForegroundService()` refusals are logged and reset the
-  internal state, allowing a later explicit or timer request to retry. Timers
-  use wake-lock-only scheduling while the process remains alive. Initial
-  promotion errors or a missed `startForeground()` handshake can instead
-  cause Android to terminate the process. There is no automatic retry loop.
-- iOS is unaffected: `startBackgroundMode`, `stopBackgroundMode`, and
-  `configure` are no-ops on iOS. iOS uses `beginBackgroundTask` as a
-  limited best-effort mechanism, not as an unlimited background mode.
-
-### Play Store review notes
-
-Android 14 (API 34) introduced stricter declarations for foreground
-service types. Apps that declare `specialUse` must justify it in the
-Play Console during the review process, in the "Foreground service"
-section of the app content declaration.
-
-The library's foreground service is declared with the subtype
-`continue_user_initiated_background_timer`. When submitting your app
-to Play Store, paste the following justification in the FGS
-declaration form (or adapt it to your app's specific use case):
-
-> This app uses a foreground service of type `specialUse` to keep a
-> user-initiated background timer running with accurate scheduling
-> while the app is in the background. The service is started only
-> after the user explicitly initiates a timer (e.g. starting a
-> workout, a recording, or a tracking session). The service is
-> stopped automatically when the timer completes or when the user
-> cancels it. The use case does not fit other FGS types:
->
-> - `mediaPlayback`: not playing media
-> - `location`: not tracking location
-> - `dataSync`: not synchronizing data with a server or device
-> - `health`: not specifically a health/fitness measurement
-> - `shortService`: timer duration is variable and may exceed the
->   ~3 minute shortService limit
->
-> Therefore `specialUse` is the appropriate type per Android's
-> documentation, which defines it as the catch-all for legitimate
-> FGS use cases that don't fit other typed categories.
-
-If your app does not need lower-drift background timer scheduling, you
-can opt out of the foreground service entirely — see the
-[Disabling the foreground service](#disabling-the-foreground-service)
-section below.
-
-### Disabling the foreground service
-
-If your app does not need lower-drift background timer scheduling, or
-if you already have your own foreground service (for media playback,
-location tracking, or another purpose) and don't want a second one
-from this library, you can opt out of the foreground service
-entirely.
-
-There are **two levels of opt-out**, and which one you need depends
-on whether you want to avoid the Play Store review friction.
-
-#### Level 1 — Runtime opt-out (simple, keeps Play Store friction)
-
-Call `BackgroundTimer.disableForegroundService()` once at app startup,
-before any timer is accepted/scheduled and before `startBackgroundMode()`:
-
-```ts
-import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
-
-// At the top of your app's entry point, BEFORE any timer is scheduled
-BackgroundTimer.disableForegroundService()
-```
-
-What this does:
-
-- The foreground service is never started, implicitly or explicitly
-- `startBackgroundMode()` becomes a no-op
-- Timers still run, using only the `PARTIAL_WAKE_LOCK` — background
-  timing can drift more than with the foreground service active (similar
-  to pre-`0.3.0` behavior)
-- No persistent notification appears
-- **The `<service>` and `FOREGROUND_SERVICE_SPECIAL_USE` permission
-  remain in the merged manifest**, so Play Store review still asks
-  for the `specialUse` justification
-
-This is the easy path — one line of code, no manifest surgery. Use
-it if you're OK with Play Store friction but just want to disable
-the FGS at runtime.
-
-The first `disableForegroundService()` call must precede every timer and
-explicit background-mode request in the process, across all native instances.
-A first call after such use throws, even if the earlier timers have finished.
-After opt-out succeeds, repeated calls are safe no-ops, including while
-wake-lock-only timers are running.
-
-Opt-out survives new HybridObjects and React Native runtime reloads in the
-same process. To re-enable the foreground service, restart the process without
-calling it.
-
-#### Level 2 — Manifest removal (zero Play Store friction)
-
-If you also want to remove the `<service>` declaration and the
-`FOREGROUND_SERVICE_SPECIAL_USE` permission from your final APK
-so that Play Store review does not ask you to justify a foreground
-service you're not using, add the following to your app's
-`android/app/src/main/AndroidManifest.xml`:
+To opt out, call `BackgroundTimer.disableForegroundService()` at startup before
+any use, as specified in the API reference. Explicit start then has no effect;
+timers continue using the wake-lock path where available. Runtime opt-out does
+not remove manifest declarations. If your app intentionally excludes this FGS,
+combine startup opt-out with manifest-merger removal of the service. Remove
+shared permissions only if no other feature needs them:
 
 ```xml
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-
-    <!-- Opt out of react-native-nitro-bg-timer-plus foreground service -->
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+      tools:node="remove" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"
+      tools:node="remove" />
+  <application>
+    <service android:name="com.margelo.nitro.backgroundtimer.NitroBackgroundTimerService"
         tools:node="remove" />
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE"
-        tools:node="remove" />
-
-    <application>
-        <service
-            android:name="com.margelo.nitro.backgroundtimer.NitroBackgroundTimerService"
-            tools:node="remove" />
-
-        <!-- rest of your application element -->
-    </application>
+  </application>
 </manifest>
 ```
 
-Note the `xmlns:tools` namespace declaration on the root `<manifest>`
-element — it's required for `tools:node="remove"` to work.
+The bundled service declares `specialUse` with subtype
+`continue_user_initiated_background_timer`. Assess your app's actual use case
+and distribution requirements; this library and its QA do not establish store
+approval. Runtime opt-out alone does not remove that declaration.
 
-What this does:
+## iOS background execution
 
-- The `<service>` and both `FOREGROUND_SERVICE*` permissions are
-  stripped from the merged manifest at build time
-- The final APK contains neither the service class declaration nor
-  the permissions
-- Play Store review does not see the `specialUse` foreground service
-  and does not ask you to justify it
-- The `POST_NOTIFICATIONS` and `WAKE_LOCK` permissions remain, since
-  they're still used by the library for the wake-lock-only fallback
+Native timers use the main run loop in common mode. Scheduling attempts to acquire
+`UIApplication.beginBackgroundTask`; the OS may deny or expire it. Expiration
+ends the matching identifier, preserves timer state and ignores stale identifiers.
+When the app later enters background with active timers and no task, the observer
+attempts reacquisition. It does not continuously renew an expired budget.
 
-**Important**: if you do manifest removal (Level 2), you should
-also do runtime opt-out (Level 1). Without runtime opt-out, the
-library will still attempt to call `startForegroundService()`
-at runtime, Android will throw because the service class isn't
-declared, the library's exception handler will catch it and fall
-back to wake-lock-only mode, but you'll see one exception per
-timer activation in the logs. Combining both levels gives you a
-clean, silent wake-lock-only mode.
+Suspension can stop both native timer firing and JS callback execution; resume
+can allow delivery again. There is no guaranteed expiration duration, infinite
+execution, or callback delivery while suspended. Clear/dispose release the task
+when appropriate. See Apple's [background-task API](https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask%28withname%3Aexpirationhandler%3A%29).
 
-Recommended combined setup:
+## Performance and limitations
 
-```ts
-// src/index.tsx or App.tsx, before any timer
-import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
-BackgroundTimer.disableForegroundService()
-```
+Choose intervals that match the work, keep callbacks short, and clear them when
+finished. Frequent intervals, pending timeout backlogs and Android wake locks
+consume CPU, memory and battery. Use monotonic elapsed time for duration logic
+rather than equating interval callback counts with elapsed seconds.
 
-```xml
-<!-- android/app/src/main/AndroidManifest.xml -->
-<uses-permission
-    android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
-    tools:node="remove" />
-<uses-permission
-    android:name="android.permission.FOREGROUND_SERVICE"
-    tools:node="remove" />
-<service
-    android:name="com.margelo.nitro.backgroundtimer.NitroBackgroundTimerService"
-    tools:node="remove" />
-```
-
-#### Decision matrix
-
-| Scenario | Level 1 (runtime) | Level 2 (manifest) | Play Store review asks about FGS |
-| --- | --- | --- | --- |
-| Keep FGS as default (near-zero drift while active) | no | no | Yes, must justify `specialUse` |
-| Disable FGS in one specific build variant | yes | no | Yes (manifest still has it) |
-| App already has its own FGS (notifee, etc.) | yes | yes | No |
-| Accept ~10% drift, want zero friction | yes | yes | No |
-| Foreground-only app (never backgrounds) | yes | yes | No |
-
-## Real-world Examples
-
-### Basic Timer Usage
-
-```ts
-import React, { useEffect, useState } from 'react'
-import { View, Text, Button } from 'react-native'
-import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
-
-const TimerExample = () => {
-  const [seconds, setSeconds] = useState(0)
-  const [intervalId, setIntervalId] = useState<number | null>(null)
-
-  const startTimer = () => {
-    const id = BackgroundTimer.setInterval(() => {
-      setSeconds(prev => prev + 1)
-    }, 1000)
-    setIntervalId(id)
-  }
-
-  const stopTimer = () => {
-    if (intervalId) {
-      BackgroundTimer.clearInterval(intervalId)
-      setIntervalId(null)
-    }
-  }
-
-  const resetTimer = () => {
-    stopTimer()
-    setSeconds(0)
-  }
-
-  useEffect(() => {
-    return () => {
-      if (intervalId) {
-        BackgroundTimer.clearInterval(intervalId)
-      }
-    }
-  }, [intervalId])
-
-  return (
-    <View style={{ padding: 20 }}>
-      <Text style={{ fontSize: 24, textAlign: 'center' }}>
-        Timer: {seconds}s
-      </Text>
-      <Button title="Start" onPress={startTimer} disabled={!!intervalId} />
-      <Button title="Stop" onPress={stopTimer} disabled={!intervalId} />
-      <Button title="Reset" onPress={resetTimer} />
-    </View>
-  )
-}
-```
-
-### Background Task Simulation
-
-```ts
-import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
-
-class BackgroundTaskManager {
-  private taskId: number | null = null
-
-  startPeriodicSync(interval: number = 30000) { // 30 seconds
-    this.taskId = BackgroundTimer.setInterval(() => {
-      this.performBackgroundSync()
-    }, interval)
-  }
-
-  stopPeriodicSync() {
-    if (this.taskId) {
-      BackgroundTimer.clearInterval(this.taskId)
-      this.taskId = null
-    }
-  }
-
-  private async performBackgroundSync() {
-    try {
-      // Simulate API call or data processing
-      console.log('Performing background sync...', new Date().toISOString())
-      
-      // Your background logic here
-      // await syncDataWithServer()
-      // await processLocalData()
-      
-    } catch (error) {
-      console.error('Background sync failed:', error)
-    }
-  }
-
-  scheduleDelayedTask(delay: number, task: () => void) {
-    return BackgroundTimer.setTimeout(task, delay)
-  }
-}
-
-// Usage
-const taskManager = new BackgroundTaskManager()
-
-// Start periodic background sync
-taskManager.startPeriodicSync(60000) // Every minute
-
-// Schedule a one-time delayed task
-taskManager.scheduleDelayedTask(5000, () => {
-  console.log('Delayed task executed!')
-})
-```
-
-### React Hook for Background Timers
-
-```ts
-import { useEffect, useRef, useCallback } from 'react'
-import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
-
-export const useBackgroundTimer = (
-  callback: () => void,
-  interval: number,
-  immediate: boolean = false
-) => {
-  const intervalRef = useRef<number | null>(null)
-  const savedCallback = useRef(callback)
-
-  // Remember the latest callback
-  useEffect(() => {
-    savedCallback.current = callback
-  }, [callback])
-
-  const start = useCallback(() => {
-    if (intervalRef.current) return // Already running
-
-    if (immediate) {
-      savedCallback.current()
-    }
-
-    intervalRef.current = BackgroundTimer.setInterval(() => {
-      savedCallback.current()
-    }, interval)
-  }, [interval, immediate])
-
-  const stop = useCallback(() => {
-    if (intervalRef.current) {
-      BackgroundTimer.clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
-  }, [])
-
-  const restart = useCallback(() => {
-    stop()
-    start()
-  }, [stop, start])
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stop()
-    }
-  }, [stop])
-
-  return { start, stop, restart, isRunning: !!intervalRef.current }
-}
-
-// Usage in component
-const MyComponent = () => {
-  const { start, stop, isRunning } = useBackgroundTimer(
-    () => console.log('Background task executed!'),
-    5000, // 5 seconds
-    true  // Run immediately
-  )
-
-  return (
-    <View>
-      <Button 
-        title={isRunning ? "Stop Timer" : "Start Timer"} 
-        onPress={isRunning ? stop : start} 
-      />
-    </View>
-  )
-}
-```
-
-## Best Practices
-
-### Memory Management
-
-Always clean up timers to prevent memory leaks:
-
-```ts
-useEffect(() => {
-  const timers: number[] = []
-
-  // Store timer IDs
-  timers.push(BackgroundTimer.setInterval(() => {
-    // Your logic
-  }, 1000))
-
-  timers.push(BackgroundTimer.setTimeout(() => {
-    // Your logic
-  }, 5000))
-
-  // Cleanup function
-  return () => {
-    timers.forEach(id => {
-      BackgroundTimer.clearInterval(id)
-      BackgroundTimer.clearTimeout(id)
-    })
-  }
-}, [])
-```
-
-### Performance Considerations
-
-- Use appropriate intervals - avoid too frequent executions
-- Consider batching operations in timer callbacks
-- Be mindful of battery usage on mobile devices
-
-```ts
-// Good: Batch multiple operations
-BackgroundTimer.setInterval(() => {
-  performDataSync()
-  updateLocalCache()
-  checkNotifications()
-}, 30000) // Every 30 seconds
-
-// Avoid: Multiple frequent timers
-// BackgroundTimer.setInterval(performDataSync, 5000)
-// BackgroundTimer.setInterval(updateLocalCache, 3000)
-// BackgroundTimer.setInterval(checkNotifications, 7000)
-```
-
-### Error Handling
-
-Timer callbacks should handle their own errors. Native timer delivery does
-not retain or invoke JS callback functions directly; native code only records
-fired timer events and signals JS to drain them. User callbacks then run from
-the JS `BackgroundTimer` wrapper. A thrown timeout callback is removed from
-the JS callback map in a cleanup path before the error is rethrown; interval
-callbacks remain registered until you clear them. Treat the library as a
-timer delivery mechanism, not as a universal error boundary for application
-callback failures.
-
-```ts
-BackgroundTimer.setInterval(() => {
-  try {
-    performRiskyOperation()
-  } catch (error) {
-    console.error('Timer callback failed:', error)
-    // Handle error appropriately
-  }
-}, 10000)
-```
-
-## Platform Support
-
-### Android Implementation Details
-
-- Background execution via `PowerManager.PARTIAL_WAKE_LOCK`
-  (non-reference-counted, held explicitly for the lifetime of all active
-  timers).
-- Timer runnables execute on a dedicated `HandlerThread`. Lifecycle and shared
-  foreground-service transitions use separate synchronized state.
-- Timer fire delivery is callback-free at the native spec boundary: the
-  worker thread records fired timer IDs in a native queue and emits a React
-  Native event so the JS wrapper can drain and execute callbacks.
-- An internal context-scoped TurboModule owns native timer instances and
-  disposes them on React Native runtime invalidation. Activity recreation
-  preserves timers when the runtime is retained.
-- Graceful fallback: if `WAKE_LOCK` permission is missing or revoked, the
-  module logs a warning and runs timers without the wake lock instead of
-  crashing.
-- Recoverable foreground-service start refusals are logged and leave timers
-  on wake-lock-only scheduling. Platform-enforced process termination remains
-  possible for promotion errors or a missed foreground-start deadline.
-- Foreground-service stop requests that arrive while a start is still
-  `STARTING` are deferred until the service has called `startForeground()`,
-  avoiding Android's foreground-service start timeout race.
-
-### iOS Implementation Details
-
-- Background execution via `UIApplication.beginBackgroundTask` as a
-  best-effort, time-limited mechanism. The expiration handler bounces to
-  the main queue, releases the expired task identifier, and preserves timer
-  state for future best-effort reacquire on background re-entry.
-- Main-thread serialization of all timer state via `DispatchQueue.main.async`
-  eliminates cross-thread races.
-- Timer fire delivery records native fired events and signals the JS wrapper
-  to drain them, avoiding generated callback wrappers for timer fire delivery.
-- `deinit` acts as a GC fallback when JS never calls `dispose()`.
+No real-time precision, universal drift percentage, unlimited background window,
+process-kill delivery, or multi-OEM guarantee is made. Physical QA results identify
+specific artifacts and scenarios; a host/Jest PASS is not device qualification.
+The 1,500-event backlog test uses a raw adapter, not the wrapper's full automatic
+path. See [qualification boundaries](PHYSICAL_QA.md#qualification-boundaries).
 
 ## Troubleshooting
 
-### Common Issues
+| Symptom | What to check |
+| --- | --- |
+| Native module / HybridObject unavailable | Match the installed RN/Nitro peers, install iOS Pods, verify autolinking and rebuild the native app. Use a native New Architecture build, not a JS-only runtime. |
+| No callback | Check whether the ID was cleared or the shared wrapper disposed, whether JS is blocked, and whether the process/runtime changed. Use example smoke logs to separate URL delivery, event signals, drains and callbacks. |
+| Android background delays | Inspect current timer service and UID-owned wake lock, start-refusal logs, opt-out state and OS power policy. A worker or wake lock alone does not prove JS delivery. |
+| Android notification missing | Check app permission, channel/user settings and current service state separately. Confirm configure ran before active demand and the drawable exists. |
+| Android start refusal | Follow permitted foreground-service start conditions; retry through a later legitimate request. Do not disable OS protections to force a PASS. |
+| Configure throws | Clear all this owner's timers and release its explicit hold; other owners may still supply the shared notification. |
+| Disposed error | Use clear for feature cleanup. Restart the app/runtime for a new wrapper; there is no reset API. FGS opt-out additionally requires a fresh process to reverse. |
+| iOS timers pause | Check suspension, task denial/expiration, app lifecycle and process death. Test resume/re-entry; adding unrelated background modes does not grant unlimited execution. |
+| Physical QA refuses preflight | Read the historical baseline/hash gate in PHYSICAL_QA.md before attempting device runs. |
 
-### Issue Resolution
+Android native logs use tag `NitroBgTimer`; iOS logs use `[NitroBgTimer]`.
+Debug builds include additional debug messages; there is no public debug-toggle
+API. Example-only smoke/QA bridges are diagnostics, not library methods.
 
-#### Timers stop working in background (Android)
+## Development and navigation
 
-- The `WAKE_LOCK`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`,
-  and `POST_NOTIFICATIONS` permissions are all declared by the library
-  manifest and merged automatically — no action needed unless you have
-  explicitly removed them.
-- On Android 13+, verify that your app has requested the
-  `POST_NOTIFICATIONS` runtime permission. If the permission is denied,
-  the notification may be hidden. Inspect service state separately from
-  notification visibility; recoverable start refusals and fatal promotion
-  errors follow the foreground-service limitations above.
-- Aggressive OEM battery savers (Xiaomi, Huawei, Oppo, etc.) may still
-  kill foreground services regardless of the above. Ask the user to
-  whitelist your app in the device battery optimization settings.
-- The library uses Android 14's `specialUse` foreground service type,
-  which has no platform-imposed time limit. If your timer still gets
-  killed, the cause is almost always an aggressive OEM battery saver
-  (see above) — Android itself will not terminate a `specialUse`
-  foreground service based on duration alone.
+- [Testing and manual qualification](TESTING.md)
+- [Physical QA runner, evidence and limits](PHYSICAL_QA.md)
+- [Contributing](CONTRIBUTING.md)
+- [Example app](example/README.md)
+- [Changelog](CHANGELOG.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 
-#### Timers not firing on iOS
+## Credits and acknowledgements
 
-- Test on a physical device; simulator and device behavior can differ.
-- Remember that `beginBackgroundTask` grants limited runtime only. If the
-  background task expires, the library preserves timer state but iOS may
-  suspend further execution until the app is foregrounded or allowed to
-  run again.
-- Check Xcode logs for
-  `[NitroBgTimer] warn: Background task expiration handler fired`.
-- Verify the app was not terminated by the system watchdog or by memory
-  pressure.
+The original library is by [Thành Công](https://github.com/tconns):
+[react-native-nitro-bg-timer](https://github.com/tconns/react-native-nitro-bg-timer).
+This fork is an independent continuation, not an official upstream release.
+Historical contributions and release records are retained.
 
-#### Memory leaks
-
-- Always clear timers when components unmount
-- Use cleanup functions in useEffect hooks
-- Monitor timer IDs and clean them appropriately
-
-### Debug Mode
-
-You can enable debug logging to troubleshoot timer issues:
-
-```ts
-// Enable debug mode (if supported by the native implementation)
-if (__DEV__) {
-  console.log('Timer created with ID:', timerId)
-}
-```
-
-## Migration Guide
-
-### From JavaScript timers
-
-```ts
-// Before (standard JavaScript timers)
-const timeoutId = setTimeout(() => {
-  console.log('This might not work in background')
-}, 5000)
-
-const intervalId = setInterval(() => {
-  console.log('This will pause in background')
-}, 1000)
-
-// After (BackgroundTimer)
-const timeoutId = BackgroundTimer.setTimeout(() => {
-  console.log('This runs when background execution is allowed!')
-}, 5000)
-
-const intervalId = BackgroundTimer.setInterval(() => {
-  console.log('This continues while background execution is allowed!')
-}, 1000)
-```
-
-### From other background timer libraries
-
-The API is designed to be a drop-in replacement for most background timer libraries:
-
-```ts
-// Just replace the import
-import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
-// The rest of your code should work the same
-```
-
-## Example App
-
-Clone the repo and run:
-
-```bash
-yarn install
-yarn build         # Bob: generates lib/typescript/index.d.ts and the JS builds
-yarn tsc --project example/tsconfig.json --noEmit --incremental false
-yarn example:ios    # or yarn example:android
-```
-
-Run these commands from the repository root. The example typecheck resolves
-the library through `lib/typescript/index.d.ts`, which does not exist in a
-clean checkout. `yarn install` does not build the library. Run `yarn build`
-before the first example typecheck, after deleting `lib`, and after changing
-library sources (including public types or Nitro specs) so the declarations
-match the current source. Plain `tsc` / `yarn typescript` uses a different
-output layout and does not replace this Bob build. Metro continues to use
-the library sources directly.
-
-The example app exercises all library use cases including background timer validation, concurrent timers, cleanup verification, and stress testing.
-
-## Contributing
-
-See `CONTRIBUTING.md` for contribution workflow.
-
-When updating spec files in `src/specs/*.nitro.ts`, regenerate Nitro artifacts:
-
-```bash
-yarn nitrogen
-```
-
-## Project Structure
-
-- `android/` — Native Android implementation (Kotlin/Java)
-- `ios/` — Native iOS implementation (Swift/Objective-C)
-- `src/` — TypeScript source code and exports
-- `nitrogen/` — Generated Nitro artifacts (auto-generated)
-- `lib/` — Compiled JavaScript output
-
-## Acknowledgements
-
-Special thanks to the following projects that inspired this library:
-
-- [mrousavy/nitro](https://github.com/mrousavy/nitro) – Nitro Modules architecture
-- [react-native-background-timer](https://github.com/ocetnik/react-native-background-timer) – Background timer concepts
-- [react-native-background-job](https://github.com/vikeri/react-native-background-job) – Background processing patterns
+Thanks to [Nitro Modules](https://github.com/margelo/nitro),
+[react-native-background-timer](https://github.com/ocetnik/react-native-background-timer)
+and [react-native-background-job](https://github.com/vikeri/react-native-background-job)
+for the architecture, timer concepts and background-processing patterns.
 
 ## License
 
-MIT © 2026 [Marco Crupi](https://github.com/marcocrupi) — react-native-nitro-bg-timer-plus fork
-MIT © 2025 [Thành Công](https://github.com/tconns) — original react-native-nitro-bg-timer
-
-This project is a fork of [react-native-nitro-bg-timer](https://github.com/tconns/react-native-nitro-bg-timer) and continues under the same MIT license.
+[MIT](LICENSE). Copyright 2025 Thành Công (original author) and 2026 Marco Crupi
+(fork maintainer), as recorded in the unchanged license file.

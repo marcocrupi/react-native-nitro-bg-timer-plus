@@ -1,6 +1,6 @@
 {
   "name": "react-native-nitro-bg-timer-plus",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "workspaces": [
     ".",
     "example"

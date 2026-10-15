@@ -1,97 +1,123 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# NitroBgTimerExample
 
-# Getting Started
+The workspace example exercises `react-native-nitro-bg-timer-plus` through its
+public wrapper and dedicated example-only diagnostics. It is a development and
+qualification app, not a background-execution guarantee or a store-ready product.
+See the [library README](../README.md) for API and platform limits.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+## Setup and run
 
-## Step 1: Start Metro
-
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
-
-To start the Metro dev server, run the following command from the root of your React Native project:
+Use the root Node engines, Yarn 4.6.0 and pinned native tools described in
+[CONTRIBUTING.md](../CONTRIBUTING.md). Commands below start at the repository root:
 
 ```sh
-# Using npm
-npm start
-
-# OR using Yarn
-yarn start
+yarn install --immutable
+yarn build
+yarn tsc --project example/tsconfig.json --noEmit --incremental false
+yarn example:start
 ```
 
-## Step 2: Build and run your app
-
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
-
-### Android
+Bob builds the declarations required by example typechecking; Metro resolves
+workspace sources. In a second terminal:
 
 ```sh
-# Using npm
-npm run android
-
-# OR using Yarn
-yarn android
+yarn example:android
+# Or, after installing Pods:
+yarn example:ios
 ```
 
-### iOS
-
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+For iOS dependencies, from the root:
 
 ```sh
+cd example
 bundle install
+cd ios
+bundle exec pod install --deployment
 ```
 
-Then, and every time you update your native dependencies, run:
+Open `example/android` in Android Studio or
+`example/ios/NitroBgTimerExample.xcworkspace` in Xcode. A native change needs a
+native rebuild. Android Release can be built from `example/android` with
+`./gradlew :app:assembleRelease`; use the matching SDK/JDK/NDK and target ABI.
+iOS Release builds use the workspace/scheme `NitroBgTimerExample`, Release
+configuration and a selected destination/signing identity.
+
+Debug normally loads JS from Metro and exposes development diagnostics. Release
+bundles JS/Hermes resources and does not depend on Metro at runtime. Debug logging,
+debugger attachment and simulator behavior can affect observations; do not treat
+a Debug UI test as Release physical qualification.
+
+## Interactive sections
+
+The app provides timeout fire/cancel, interval start/stop/reset, Background Test
+(including Android notification configuration and explicit mode), concurrent
+timers, component cleanup, a timer hook, a bounded stress test and a core smoke
+button. The log view shows application observations. Android 13+ notification
+permission is requested by the example; iOS also has its own notification prompt.
+Those prompts are app behavior, not a timer-library permission API.
+
+Stop/clear feature timers after each check. `Disable FGS` is process-wide on
+Android and cannot be undone by re-mounting the screen. `Run Smoke` ends with
+terminal `BackgroundTimer.dispose()`; use it last. Restart the **process** before
+another independent run, including after an opt-out test. Fast Refresh is not a
+reliable reset of native/runtime/process state.
+
+## Automated routes and logs
+
+```text
+nitrobgtimerexample://smoke?runId=example-core-001
+nitrobgtimerexample://smoke?runId=example-ui-001&mode=ui
+nitrobgtimerexample://smoke?runId=example-qa-001&mode=qa&scenario=timers&deviceId=DEVICE_ID
+```
+
+Use a fresh valid runId for each run. Core starts automatically; UI mode assigns
+an identity and leaves buttons for Maestro to drive. QA validates its extra
+fields, hides interactive controls, and excludes simultaneous core/UI runs.
+Use the runner for device automation/provenance instead of treating a manually
+opened QA URL as qualification. No source edits are required to activate tests.
+
+From the root, after the required target/build setup:
 
 ```sh
-bundle exec pod install
+yarn smoke:android
+bash scripts/smoke-android.sh --device YOUR_ADB_SERIAL --background
+bash scripts/smoke-ios.sh --simulator --terminate-existing
+bash scripts/smoke-ios.sh --device YOUR_COREDEVICE_ID \
+  --xcodebuild-device-id YOUR_XCODE_UDID --terminate-existing
+yarn ui-smoke:android
+yarn ui-smoke:ios
 ```
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+UI smoke requires Maestro. Physical iPhone Maestro setup/signing is best-effort;
+its setup failure is distinct from a library assertion failure. See
+[TESTING.md](../TESTING.md) for prerequisites, flags and manual diagnosis.
+
+Core markers use `[NitroBgSmoke]`, UI actions `[NitroBgUiSmoke]`, custom QA
+`[NitroBgPhysical]`, and iOS lifecycle `[NitroBgPhysicalNative]`. iOS mirrors core/QA
+JS markers into native logs through `NitroBgSmokeLog` and retains a pending URL
+fallback. Android's `NitroBgPhysicalQA` bridge can observe Activity/context/thread/
+notification identities and request recreation/reload. These bridges are
+example-only, not exported library APIs. Inspect matching runId, PID, steps and
+raw exits; an isolated PASS line or visible UI counter is insufficient evidence.
+
+The Release [Physical QA suite](../PHYSICAL_QA.md) covers device discovery, build
+receipts, locks, scenarios, independent validation and cleanup. **Its historical
+baseline/hash gate currently blocks current main**, including dry-run. Complete
+the documented tooling maintenance before starting a campaign. Backlog/multi-owner
+raw adapters have a different contract from wrapper tests; raw Nitro objects must
+never be accessed after disposal.
+
+## Host checks
 
 ```sh
-# Using npm
-npm run ios
-
-# OR using Yarn
-yarn ios
+yarn --cwd example test --runInBand
+node --test scripts/smoke-harness.test.cjs scripts/smoke-runner-fixture.test.cjs
+python3 scripts/physical-qa.test.py
 ```
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+These commands run from the root and do not qualify physical behavior. Keep
+runtime logs/artifacts outside the repository, redact private device identifiers
+before sharing, and retain failed attempts alongside selected successes.
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
-
-## Step 3: Modify your app
-
-Now that you have successfully run the app, let's make changes!
-
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
-
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
-
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
-
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+For API changes and package work, follow [CONTRIBUTING.md](../CONTRIBUTING.md).
+For release history, see [CHANGELOG.md](../CHANGELOG.md).
