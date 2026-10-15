@@ -27,7 +27,8 @@ import {
   runBackgroundTimerSmokeTest,
   type SmokeUiState,
 } from './src/smoke/backgroundTimerSmoke'
-import { activateUiSmokeRun } from './src/smoke/uiSmoke'
+import { parsePhysicalQAUrl, runPhysicalQA, physicalQAActive } from './src/smoke/physicalQA'
+import { activateUiSmokeRun, isUiSmokeActive } from './src/smoke/uiSmoke'
 
 const SMOKE_RUN_ID_PATTERN = /^[A-Za-z0-9._-]{1,80}$/
 const SMOKE_URL_LOG_MAX_LENGTH = 180
@@ -73,6 +74,7 @@ function AppContent() {
   const [smokeState, setSmokeState] = useState<SmokeUiState>({
     status: 'idle',
   })
+  const [qaMode, setQaMode] = useState(false)
   const activeSmokeRef = useRef<Promise<void> | null>(null)
   const handledSmokeUrlsRef = useRef<Set<string>>(new Set())
   const handledSmokeRunIdsRef = useRef<Set<string>>(new Set())
@@ -87,7 +89,7 @@ function AppContent() {
 
   const startSmoke = useCallback(
     (runId = createSmokeRunId()) => {
-      if (activeSmokeRef.current) return
+      if (activeSmokeRef.current || physicalQAActive) return
 
       const startedAt = Date.now()
       setSmokeState({ status: 'running', runId, startedAt })
@@ -130,6 +132,20 @@ function AppContent() {
     (url: string | null, source: SmokeUrlSource) => {
       if (!url) return
 
+      if (/[?&]mode=qa(?:&|$)/.test(url)) {
+        try {
+          const qa = parsePhysicalQAUrl(url)
+          if (!qa || handledSmokeRunIdsRef.current.has(qa.runId)) return
+          if (activeSmokeRef.current || physicalQAActive || isUiSmokeActive()) return
+          setQaMode(true)
+          handledSmokeRunIdsRef.current.add(qa.runId)
+          void runPhysicalQA(qa).catch(error => console.error('[NitroBgPhysical] CONTROL_FAILURE', String(error)))
+        } catch (error) {
+          console.error('[NitroBgPhysical] INVALID_REQUEST', String(error))
+        }
+        return
+      }
+      if (physicalQAActive) return
       const parsed = parseSmokeUrl(url)
       emitSmokeDiagnostic(
         `[NitroBgSmoke] DEEPLINK_RECEIVED runId=${parsed.runId ?? 'none'} url=${parsed.normalizedUrl} source=${source}`,
@@ -253,6 +269,10 @@ function AppContent() {
         })
     }
 
+    if (Platform.OS === 'android') {
+      const resumeUrl = NativeModules.NitroBgPhysicalQA?.consumeResumeUrl?.()
+      if (resumeUrl) handleSmokeUrl(resumeUrl, 'native_pending_url')
+    }
     Linking.getInitialURL()
       .then((url) => {
         if (mounted) handleSmokeUrl(url ?? null, 'initial')
@@ -285,6 +305,8 @@ function AppContent() {
       subscription.remove()
     }
   }, [addLog, handleSmokeUrl])
+
+  if (qaMode) return <View><Text>Physical QA running — inspect correlated device logs.</Text></View>
 
   return (
     <SafeAreaView style={styles.safe}>

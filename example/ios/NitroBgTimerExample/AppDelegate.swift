@@ -8,6 +8,7 @@ import UserNotifications
 final class NitroBgSmokeLog: NSObject, RCTBridgeModule {
   private static let pendingSmokeUrlLock = NSObject()
   private static var pendingSmokeUrl: String?
+  static var physicalRunId: String?
   private static let emptyCString = strdup("")!
   private static let logMethodCString = strdup("log:")!
   private static let consumePendingSmokeUrlMethodCString = strdup("consumePendingSmokeUrl")!
@@ -48,6 +49,23 @@ final class NitroBgSmokeLog: NSObject, RCTBridgeModule {
   @objc
   static func requiresMainQueueSetup() -> Bool {
     false
+  }
+
+  private static let physicalSnapshotInfo: UnsafePointer<RCTMethodInfo> = {
+    let pointer = UnsafeMutablePointer<RCTMethodInfo>.allocate(capacity: 1)
+    pointer.initialize(to: RCTMethodInfo(jsName: emptyCString,
+      objcName: strdup("physicalSnapshot")!, isSync: true))
+    return UnsafePointer(pointer)
+  }()
+
+  @objc(physicalSnapshot)
+  func physicalSnapshot() -> String {
+    return "{\"pid\":\(ProcessInfo.processInfo.processIdentifier)}"
+  }
+
+  @objc(__rct_export__physicalSnapshot)
+  static func exportPhysicalSnapshot() -> UnsafePointer<RCTMethodInfo> {
+    physicalSnapshotInfo
   }
 
   @objc(log:)
@@ -96,6 +114,10 @@ final class NitroBgSmokeLog: NSObject, RCTBridgeModule {
       return
     }
 
+    if let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+      parts.queryItems?.first(where: { $0.name == "mode" })?.value == "qa" {
+      physicalRunId = parts.queryItems?.first(where: { $0.name == "runId" })?.value
+    }
     objc_sync_enter(pendingSmokeUrlLock)
     pendingSmokeUrl = sanitizeSmokeUrl(url)
     objc_sync_exit(pendingSmokeUrlLock)
@@ -144,7 +166,7 @@ final class NitroBgSmokeLog: NSObject, RCTBridgeModule {
       .replacingOccurrences(of: "\r", with: " ")
     let limited = String(singleLine.prefix(1000))
 
-    if limited.hasPrefix("[NitroBgSmoke]") {
+    if limited.hasPrefix("[NitroBgSmoke]") || limited.hasPrefix("[NitroBgPhysical]") {
       return limited
     }
 
@@ -180,6 +202,8 @@ final class NitroBgSmokeLog: NSObject, RCTBridgeModule {
 class AppDelegate: UIResponder, UIApplicationDelegate {
   var window: UIWindow?
 
+  private var physicalObservers: [NSObjectProtocol] = []
+
   var reactNativeDelegate: ReactNativeDelegate?
   var reactNativeFactory: RCTReactNativeFactory?
 
@@ -191,6 +215,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
       logSmokeNativeUrl("LAUNCH_URL", url: url)
     }
 
+    for name in [UIApplication.didEnterBackgroundNotification, UIApplication.didBecomeActiveNotification,
+                 UIApplication.willEnterForegroundNotification] {
+      physicalObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+        guard let runId = NitroBgSmokeLog.physicalRunId else { return }
+        NSLog("[NitroBgPhysicalNative] runId=%@ pid=%d lifecycle=%@ wall=%.3f mono=%.3f",
+          runId, ProcessInfo.processInfo.processIdentifier, name.rawValue,
+          Date().timeIntervalSince1970 * 1000, ProcessInfo.processInfo.systemUptime * 1000)
+      })
+    }
     let delegate = ReactNativeDelegate()
     let factory = RCTReactNativeFactory(delegate: delegate)
     delegate.dependencyProvider = RCTAppDependencyProvider()
