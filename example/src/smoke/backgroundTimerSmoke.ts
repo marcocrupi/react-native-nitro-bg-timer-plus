@@ -1,5 +1,11 @@
-import { NativeEventEmitter, NativeModules, Platform } from 'react-native'
+import {
+  AppState,
+  NativeEventEmitter,
+  NativeModules,
+  Platform,
+} from 'react-native'
 import { BackgroundTimer } from 'react-native-nitro-bg-timer-plus'
+import { getUiSmokeRunId } from './uiSmoke'
 
 export const SMOKE_TIMEOUT_MS = 30000
 
@@ -87,11 +93,19 @@ type IosEventDiagnostics = {
 }
 
 let activeRun: Promise<SmokeResult> | null = null
+let activeRunId: string | null = null
 let disposedBySmoke = false
 
 export function createSmokeRunId(prefix = 'manual'): string {
   const suffix = Math.random().toString(36).slice(2, 8)
-  return `${prefix}-${Date.now()}-${suffix}`
+  const runId = `${prefix}-${Date.now()}-${suffix}`
+  const uiRunId = getUiSmokeRunId()
+  if (prefix === 'manual' && uiRunId) {
+    emitSmokeMarker(
+      `[NitroBgSmoke] UI_CORE_BINDING runId=${uiRunId} coreRunId=${runId}`
+    )
+  }
+  return runId
 }
 
 export function emitSmokeMarker(
@@ -106,7 +120,13 @@ export function emitSmokeMarker(
 export function runBackgroundTimerSmokeTest(
   options: BackgroundTimerSmokeOptions
 ): Promise<SmokeResult> {
-  if (activeRun) return activeRun
+  if (activeRun) {
+    return activeRunId === options.runId
+      ? activeRun
+      : Promise.resolve(
+          failWithoutStartingTimers(options, 'smoke_run_in_progress')
+        )
+  }
 
   if (disposedBySmoke) {
     return Promise.resolve(
@@ -117,13 +137,79 @@ export function runBackgroundTimerSmokeTest(
     )
   }
 
+  activeRunId = options.runId
   activeRun = executeSmoke(options).finally(() => {
+    activeRunId = null
     activeRun = null
   })
   return activeRun
 }
 
-function executeSmoke(options: BackgroundTimerSmokeOptions): Promise<SmokeResult> {
+// This probes a pending timeout. A late clear cannot prove cancellation.
+// Injected clocks/timers are used only by harness causality witnesses.
+export async function verifyPendingTimeoutCancellation(
+  options: BackgroundTimerSmokeOptions,
+  timers: {
+    schedule: (callback: () => void, delay: number) => number
+    clear: (id: number) => void
+    wait: (ms: number) => Promise<void>
+    now: () => number
+    onCallbackAfterClear?: () => void
+  }
+): Promise<void> {
+  const delayMs = 160
+  const events: { kind: string; at: number }[] = []
+  const record = (kind: string) => {
+    const at = timers.now()
+    events.push({ kind, at })
+    emit(
+      options,
+      `[NitroBgSmoke] CLEAR_TIMEOUT_EVENT runId=${options.runId} seq=${events.length} kind=${kind} at=${at}`
+    )
+    return at
+  }
+  const scheduleAt = record('schedule')
+  let callbackAt: number | undefined
+  let clearCompleted = false
+  let callbackBeforeClear = false
+  let callbackAfterClear = false
+  const id = timers.schedule(() => {
+    callbackAt = record('callback')
+    if (clearCompleted) {
+      callbackAfterClear = true
+      timers.onCallbackAfterClear?.()
+    } else callbackBeforeClear = true
+  }, delayMs)
+  record('clearRequested')
+  timers.clear(id)
+  clearCompleted = true
+  const clearAt = record('clear')
+  await timers.wait(300)
+  record('observed')
+  const precondition = callbackBeforeClear
+    ? 'clearTimeout_precondition_failed_callback_before_clear'
+    : clearAt - scheduleAt >= delayMs
+      ? 'clearTimeout_precondition_failed_deadline'
+      : undefined
+  const reason =
+    precondition ??
+    (callbackAfterClear ? 'callback_fired_after_clearTimeout' : undefined)
+  emit(
+    options,
+    `[NitroBgSmoke] CLEAR_TIMEOUT_CAUSALITY runId=${options.runId} scheduleAt=${scheduleAt} callbackAt=${callbackAt ?? 'none'} clearAt=${clearAt} delayMs=${delayMs} order=${events.map((event) => event.kind).join(',')} status=${precondition ? 'precondition_failed' : callbackAfterClear ? 'fail' : 'valid'}`
+  )
+  if (reason) throw new Error(reason)
+}
+
+function smokeMonotonicNow(): number {
+  return (
+    globalThis as unknown as { performance: { now: () => number } }
+  ).performance.now()
+}
+
+function executeSmoke(
+  options: BackgroundTimerSmokeOptions
+): Promise<SmokeResult> {
   return runSmoke(options)
 }
 
@@ -143,10 +229,21 @@ async function runSmoke(
   let iosIntervalFired = false
   let iosEventDiagnostics: IosEventDiagnostics | undefined
   let disposed = false
+  let cancellationStepPassed = false
   let status: SmokeResultStatus = 'pass'
   let reason: string | undefined
 
   emit(options, `[NitroBgSmoke] START runId=${options.runId}`)
+  const appStateMarker = (state: string | null | undefined) =>
+    emit(
+      options,
+      `[NitroBgSmoke] APP_STATE runId=${options.runId} state=${state ?? 'unknown'} at=${Date.now()} monotonicAt=${smokeMonotonicNow()}`
+    )
+  appStateMarker(AppState.currentState)
+  const appStateSubscription = AppState.addEventListener(
+    'change',
+    appStateMarker
+  )
 
   const runStep = async (
     name: string,
@@ -156,7 +253,11 @@ async function runSmoke(
     const remainingMs = deadline - Date.now()
     if (remainingMs <= 0) {
       const timeoutReason = 'global_timeout'
-      steps.push({ name: 'globalTimeout', status: 'fail', reason: timeoutReason })
+      steps.push({
+        name: 'globalTimeout',
+        status: 'fail',
+        reason: timeoutReason,
+      })
       emit(
         options,
         `[NitroBgSmoke] STEP FAIL runId=${options.runId} name=globalTimeout reason=${timeoutReason}`
@@ -209,6 +310,10 @@ async function runSmoke(
         scheduleBackgroundTimeout(
           registry,
           () => {
+            emit(
+              options,
+              `[NitroBgSmoke] TIMER_CALLBACK runId=${options.runId} kind=timeout`
+            )
             iosTimeoutFired = true
             emitIosTimerMarker(options, 'timeout', 'fired')
             resolve()
@@ -218,22 +323,28 @@ async function runSmoke(
       })
     })
 
-    await runStep('clearTimeout', async () => {
-      let fired = false
-      const id = scheduleBackgroundTimeout(
-        registry,
-        () => {
-          fired = true
+    await runStep('clearTimeout', () =>
+      verifyPendingTimeoutCancellation(options, {
+        schedule: (callback, delay) =>
+          scheduleBackgroundTimeout(registry, callback, delay),
+        clear: (id) => clearBackgroundTimeout(registry, id),
+        wait: sleep,
+        now: () => smokeMonotonicNow(),
+        onCallbackAfterClear: () => {
+          status = 'fail'
+          reason = 'callback_fired_after_clearTimeout'
+          if (cancellationStepPassed) {
+            steps.push({ name: 'clearTimeout', status: 'fail', reason })
+            emit(
+              options,
+              `[NitroBgSmoke] STEP FAIL runId=${options.runId} name=clearTimeout reason=${reason}`
+            )
+          }
         },
-        160
-      )
-      await sleep(25)
-      clearBackgroundTimeout(registry, id)
-      await sleep(300)
-      if (fired) {
-        throw new Error('callback_fired_after_clearTimeout')
-      }
-    })
+      })
+    )
+
+    cancellationStepPassed = true
 
     await runStep('setInterval', () => {
       return new Promise<void>((resolve) => {
@@ -246,7 +357,13 @@ async function runSmoke(
               iosIntervalFired = true
               emitIosTimerMarker(options, 'interval', 'fired')
             }
-            if (intervalTicks >= 3) resolve()
+            if (intervalTicks === 3) {
+              emit(
+                options,
+                `[NitroBgSmoke] TIMER_CALLBACK runId=${options.runId} kind=interval ticks=3`
+              )
+              resolve()
+            }
           },
           80
         )
@@ -335,6 +452,10 @@ async function runSmoke(
             registry,
             () => {
               ticks += 1
+              emit(
+                options,
+                `[NitroBgSmoke] BACKGROUND_TICK runId=${options.runId} tick=${ticks} state=${AppState.currentState} at=${Date.now()} monotonicAt=${smokeMonotonicNow()}`
+              )
               if (ticks >= BACKGROUND_WINDOW_TICKS) resolve()
             },
             BACKGROUND_WINDOW_INTERVAL_MS
@@ -366,6 +487,7 @@ async function runSmoke(
     reason =
       error instanceof SmokeStepError ? error.message : reasonFromError(error)
   } finally {
+    appStateSubscription.remove()
     iosEventDiagnostics?.removeListener()
 
     if (!disposed) {

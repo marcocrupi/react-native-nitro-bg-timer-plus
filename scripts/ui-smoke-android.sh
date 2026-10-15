@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/smoke-android.sh"
+
 PACKAGE_NAME="com.nitrobgtimerexample"
 FLOW="main"
 TIMEOUT_SECONDS=90
@@ -8,9 +11,9 @@ CONTEXT_TIMEOUT_SECONDS=30
 RUN_ID=""
 DEVICE=""
 INSTALL=0
+APK=""
 ADB_BIN="${ADB:-adb}"
 SMOKE_RUN_ID_PATTERN='^[A-Za-z0-9._-]{1,80}$'
-APP_RUNTIME_ERROR_PATTERN='FATAL EXCEPTION|ReactNativeJS.*(Error|Exception)|RedBox|Invariant Violation|SIGABRT|Fatal signal'
 APP_PIDS=""
 WAKE_LOCK_TAG="NitroBgTimer::WakeLock"
 FGS_SERVICE_CLASS="NitroBackgroundTimerService"
@@ -21,9 +24,10 @@ usage() {
 Usage: bash scripts/ui-smoke-android.sh [options]
 
 Options:
+  --apk <path>         Require installed APK bytes to match this build.
   --device <serial>     adb device serial. Required when multiple devices are authorized.
   --run-id <id>         UI smoke run id, matching [A-Za-z0-9._-]{1,80}.
-  --timeout <sec>       Marker wait timeout after Maestro finishes. Default: 90.
+  --timeout <sec>       Bound each Maestro command and marker wait. Default: 90.
   --flow <name>         main, fgs-optout, or fgs-optout-deep. Default: main.
   --install             Run yarn example:android before the UI smoke.
   --package-name <id>   Android package id. Default: com.nitrobgtimerexample.
@@ -71,6 +75,7 @@ require_maestro() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --apk) require_option_value "$1" "${2:-}"; APK="$2"; shift 2 ;;
     --device)
       require_option_value "$1" "${2:-}"
       DEVICE="$2"
@@ -169,73 +174,34 @@ LOG_SINCE="$(date '+%m-%d %H:%M:%S.000')"
 LOGCAT_PID=""
 
 cleanup() {
+  if [[ -n "${LOG_FILE:-}" ]]; then echo "Log: $LOG_FILE"; fi
   if [[ -n "$LOGCAT_PID" ]]; then
     kill "$LOGCAT_PID" >/dev/null 2>&1 || true
     wait "$LOGCAT_PID" >/dev/null 2>&1 || true
   fi
 }
-trap cleanup EXIT
+trap 'cleanup; harness_unlock' EXIT
 
 remember_app_pids() {
-  local current_pids=""
-  local pid=""
+  local current
+  current="$("${ADB_CMD[@]}" shell pidof "$PACKAGE_NAME" 2>/dev/null | tr -d '\r' || true)"
+  [[ "$current" =~ ^[0-9]+$ ]] || die 1 "FAIL app_pid_unavailable"
+  if [[ -n "$APP_PIDS" && "$current" != "$APP_PIDS" ]]; then die 1 "FAIL process_changed"; fi
+  APP_PIDS="$current"
+  kill -0 "$LOGCAT_PID" 2>/dev/null || die 1 "FAIL log_capture_ended"
+}
 
-  current_pids="$("${ADB_CMD[@]}" shell pidof "$PACKAGE_NAME" 2>/dev/null | tr -d '\r' || true)"
-  for pid in $current_pids; do
-    case " ${APP_PIDS} " in
-      *" ${pid} "*)
-        ;;
-      *)
-        APP_PIDS="${APP_PIDS:+${APP_PIDS} }${pid}"
-        ;;
-    esac
-  done
+validate_ui_progress() {
+  local status=0
+  remember_app_pids
+  harness_validate "$LOG_FILE" "$RUN_ID" android "$APP_PIDS" "$FLOW" poll || status=$?
+  [[ "$status" -eq 3 ]] || [[ "$status" -eq 0 ]] || exit "$status"
 }
 
 find_app_runtime_error() {
-  local crash_line=""
-
-  if crash_line="$(grep -F "Crash of app ${PACKAGE_NAME}" "$LOG_FILE" | tail -n 1)"; then
-    echo "$crash_line"
-    return 0
-  fi
-
-  if crash_line="$(grep -F "AndroidRuntime" "$LOG_FILE" | grep -F "Process: ${PACKAGE_NAME}" | tail -n 1)"; then
-    echo "$crash_line"
-    return 0
-  fi
-
-  if crash_line="$(grep -F "$PACKAGE_NAME" "$LOG_FILE" | grep -E "$APP_RUNTIME_ERROR_PATTERN" | tail -n 1)"; then
-    echo "$crash_line"
-    return 0
-  fi
-
-  if [[ -n "$APP_PIDS" ]]; then
-    if crash_line="$(awk -v app_pids="$APP_PIDS" -v pattern="$APP_RUNTIME_ERROR_PATTERN" '
-      BEGIN {
-        pid_count = split(app_pids, pids, /[[:space:]]+/)
-        for (i = 1; i <= pid_count; i++) {
-          if (pids[i] != "") {
-            known_pids[pids[i]] = 1
-          }
-        }
-      }
-      ($3 in known_pids) && $0 ~ pattern {
-        last = $0
-      }
-      END {
-        if (last != "") {
-          print last
-          exit 0
-        }
-        exit 1
-      }
-    ' "$LOG_FILE")"; then
-      echo "$crash_line"
-      return 0
-    fi
-  fi
-
+  local status=0 output
+  output="$(harness_validate "$LOG_FILE" "$RUN_ID" android "$APP_PIDS" "$FLOW" poll)" || status=$?
+  if [[ "$status" -eq 1 || "$status" -eq 2 ]]; then echo "$output"; return 0; fi
   return 1
 }
 
@@ -295,6 +261,7 @@ wait_for_ui_smoke_pass() {
   local crash_line=""
 
   while (( SECONDS < deadline )); do
+    validate_ui_progress
     if grep -F "$pass_marker" "$LOG_FILE" >/dev/null 2>&1; then
       echo "Observed PASS ${marker}"
       return 0
@@ -557,7 +524,11 @@ run_fgs_optout_deep_verification() {
     echo "WARN runId=${RUN_ID} wake_lock_validation=best-effort"
   fi
 
-  echo "PASS runId=${RUN_ID} flow=${FLOW}"
+  remember_app_pids
+  harness_android_artifact "$ADB_BIN" "$DEVICE" "$PACKAGE_NAME" "$APK" "$APP_PIDS" "$LOGCAT_PID"
+  [[ "$HARNESS_APK_HASH" == "$INITIAL_APK_HASH" ]] || die 1 "FAIL artifact_changed"
+  harness_validate "$LOG_FILE" "$RUN_ID" android "$APP_PIDS" "$FLOW" final
+  echo "PASS runId=${RUN_ID} pid=${APP_PIDS} flow=${FLOW}"
   echo "Log: ${LOG_FILE}"
   echo "Maestro log: ${MAESTRO_LOG_FILE}"
   echo "Evidence dir: ${EVIDENCE_DIR}"
@@ -573,9 +544,7 @@ wait_for_ui_smoke_context() {
 
   echo "Waiting up to ${CONTEXT_TIMEOUT_SECONDS}s for UI smoke context"
   while (( SECONDS < deadline )); do
-    if [[ -z "$APP_PIDS" ]]; then
-      remember_app_pids
-    fi
+    validate_ui_progress
 
     if context_line="$(grep -F "$context_marker" "$LOG_FILE" | tail -n 1)"; then
       echo "Context ready runId=${RUN_ID}"
@@ -608,6 +577,7 @@ if [[ ! -f "$FLOW_FILE" ]]; then
   die 2 "Maestro flow not found: ${FLOW_FILE}"
 fi
 
+harness_lock android "$DEVICE" "$RUN_ID"
 if [[ "$INSTALL" -eq 1 ]]; then
   yarn example:android --deviceId "$DEVICE"
 fi
@@ -618,15 +588,16 @@ if ! "${ADB_CMD[@]}" shell pm path "$PACKAGE_NAME" >/dev/null 2>&1; then
   exit 2
 fi
 
+harness_android_artifact "$ADB_BIN" "$DEVICE" "$PACKAGE_NAME" "$APK"
+INITIAL_APK_HASH="$HARNESS_APK_HASH"
+
 "${ADB_CMD[@]}" shell pm grant "$PACKAGE_NAME" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 
 echo "Android UI smoke runId=${RUN_ID} device=${DEVICE} flow=${FLOW}"
 echo "URL: ${SMOKE_URL}"
 echo "Log capture: logcat -> ${LOG_FILE}"
 
-echo "Clearing logcat before opening UI smoke deep link"
-"${ADB_CMD[@]}" logcat -c >/dev/null 2>&1 || true
-"${ADB_CMD[@]}" logcat -v time -T "$LOG_SINCE" >"$LOG_FILE" 2>&1 &
+"${ADB_CMD[@]}" logcat -v threadtime -T "$LOG_SINCE" >"$LOG_FILE" 2>&1 &
 LOGCAT_PID="$!"
 sleep 0.5
 
@@ -647,7 +618,7 @@ wait_for_ui_smoke_context
 
 set +e
 echo "Maestro APP_ID: ${PACKAGE_NAME}"
-maestro test \
+harness_ui_flow test \
   --device "$DEVICE" \
   -e "APP_ID=${PACKAGE_NAME}" \
   -e "SMOKE_URL=${SMOKE_URL}" \
@@ -656,7 +627,8 @@ MAESTRO_STATUS=$?
 set -e
 
 if [[ "$MAESTRO_STATUS" -ne 0 ]]; then
-  echo "FAIL runId=${RUN_ID} maestro_failed exit=${MAESTRO_STATUS}" >&2
+  harness_validate "$LOG_FILE" "$RUN_ID" android "$APP_PIDS" "$FLOW" poll || true
+  echo "HARNESS/TOOLING FAIL runId=${RUN_ID} maestro_failed exit=${MAESTRO_STATUS}" >&2
   tail -n 80 "$MAESTRO_LOG_FILE" >&2 || true
   echo "Maestro log: ${MAESTRO_LOG_FILE}" >&2
   exit 1
@@ -668,81 +640,20 @@ if [[ "$FLOW" == "fgs-optout-deep" ]]; then
   run_fgs_optout_deep_verification
 fi
 
-expected_markers_main=(
-  "section=set-timeout action=schedule"
-  "section=set-timeout action=cancel"
-  "section=set-interval action=start"
-  "section=set-interval action=stop"
-  "section=set-interval action=reset"
-  "section=background action=js-comparison"
-  "section=background action=configure-notification"
-  "section=background action=start-mode"
-  "section=background action=stop-mode"
-  "section=background action=start"
-  "section=background action=stop"
-  "section=concurrent action=start-all"
-  "section=concurrent action=stop-all"
-  "section=cleanup action=mount"
-  "section=cleanup action=unmount"
-  "section=hook action=start"
-  "section=hook action=restart"
-  "section=hook action=stop"
-  "section=stress action=create-100"
-  "section=core-smoke action=run"
-)
-
-expected_markers_fgs_optout=(
-  "section=background action=disable-fgs"
-)
-
-expected_markers_fgs_optout_deep=(
-  "section=background action=fgs-optout-disable"
-  "section=background action=fgs-optout-timeout-started"
-  "section=background action=fgs-optout-timeout-fired"
-)
-
-if [[ "$FLOW" == "main" ]]; then
-  expected_markers=("${expected_markers_main[@]}")
-elif [[ "$FLOW" == "fgs-optout" ]]; then
-  expected_markers=("${expected_markers_fgs_optout[@]}")
-else
-  expected_markers=("${expected_markers_fgs_optout_deep[@]}")
-fi
-
 deadline=$((SECONDS + TIMEOUT_SECONDS))
 while (( SECONDS < deadline )); do
-  if fail_line="$(grep -F "[NitroBgUiSmoke] FAIL runId=${RUN_ID}" "$LOG_FILE" | tail -n 1)"; then
-    echo "FAIL runId=${RUN_ID}"
-    echo "$fail_line"
-    exit 1
-  fi
-
-  if crash_line="$(find_app_runtime_error)"; then
-    echo "FAIL runId=${RUN_ID} crash_or_redbox_detected"
-    echo "$crash_line"
-    exit 1
-  fi
-
-  missing=()
-  for marker in "${expected_markers[@]}"; do
-    if ! grep -F "[NitroBgUiSmoke] PASS runId=${RUN_ID} ${marker}" "$LOG_FILE" >/dev/null 2>&1; then
-      missing+=("$marker")
-    fi
-  done
-
-  if [[ "${#missing[@]}" -eq 0 ]]; then
-    echo "PASS runId=${RUN_ID} flow=${FLOW}"
-    echo "Log: ${LOG_FILE}"
+  remember_app_pids
+  status=0
+  harness_validate "$LOG_FILE" "$RUN_ID" android "$APP_PIDS" "$FLOW" poll || status=$?
+  if [[ "$status" -eq 0 ]]; then
+    harness_android_artifact "$ADB_BIN" "$DEVICE" "$PACKAGE_NAME" "$APK" "$APP_PIDS" "$LOGCAT_PID"
+    [[ "$HARNESS_APK_HASH" == "$INITIAL_APK_HASH" ]] || die 1 "FAIL artifact_changed"
+    remember_app_pids
+    harness_validate "$LOG_FILE" "$RUN_ID" android "$APP_PIDS" "$FLOW" final
+    echo "PASS runId=$RUN_ID pid=$APP_PIDS flow=$FLOW log=$LOG_FILE maestro=$MAESTRO_LOG_FILE"
     exit 0
   fi
-
+  [[ "$status" -eq 3 ]] || exit "$status"
   sleep 0.25
 done
-
-echo "TIMEOUT runId=${RUN_ID} after ${TIMEOUT_SECONDS}s waiting for UI smoke markers" >&2
-echo "Missing markers:" >&2
-printf '  %s\n' "${missing[@]}" >&2
-grep -F "$RUN_ID" "$LOG_FILE" | tail -n 80 >&2 || true
-echo "Full log: ${LOG_FILE}" >&2
-echo "Maestro log: ${MAESTRO_LOG_FILE}" >&2
-exit 124
+die 124 "TIMEOUT UI sequence runId=$RUN_ID log=$LOG_FILE maestro=$MAESTRO_LOG_FILE"

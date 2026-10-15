@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/smoke-android.sh"
+APP_PID=""
+INSTALLED_APP=""
+
 BUNDLE_ID="org.reactjs.native.example.NitroBgTimerExample"
 PROCESS_NAME="NitroBgTimerExample"
 WORKSPACE="example/ios/NitroBgTimerExample.xcworkspace"
@@ -20,7 +25,6 @@ DERIVED_DATA_PATH=""
 DERIVED_DATA_PROVIDED=0
 METRO_PORT="${RCT_METRO_PORT:-8081}"
 SMOKE_RUN_ID_PATTERN='^[A-Za-z0-9._-]{1,80}$'
-RUNTIME_ERROR_PATTERN='NativeEventEmitter|RCTEventEmitter|RedBox|ReactNativeJS[[:space:]:]+Error|SIGABRT|std::terminate|Fatal error|RCTFatal|NS[A-Za-z]+Exception|uncaught exception|Terminating app due to'
 
 LOG_FILE=""
 LOG_PID=""
@@ -34,6 +38,7 @@ Modes:
   Device:    bash scripts/ui-smoke-ios.sh --device <devicectl-id> [--xcodebuild-device-id <id>] [--maestro-device-id <id>]
 
 Options:
+  --configuration <name>  Debug or Release. Default: Debug.
   --simulator [udid]       Use a booted simulator. Defaults to "booted".
   --device <id>            Use a physical device via xcrun devicectl.
   --xcodebuild-device-id <id>
@@ -41,7 +46,7 @@ Options:
   --maestro-device-id <id>
                            Maestro device id for the same physical device.
   --run-id <id>            UI smoke run id, matching [A-Za-z0-9._-]{1,80}.
-  --timeout <sec>          Marker wait timeout after Maestro finishes. Default: 90.
+  --timeout <sec>          Bound each Maestro command and marker wait. Default: 90.
   --flow <name>            main or fgs-optout. Default: main.
   --skip-build             Do not run xcodebuild.
   --skip-install           Do not install the built app.
@@ -121,15 +126,19 @@ run_logged() {
 }
 
 cleanup() {
+  if [[ -n "${LOG_FILE:-}" ]]; then echo "Log: $LOG_FILE"; fi
   if [[ -n "$LOG_PID" ]]; then
     kill "$LOG_PID" >/dev/null 2>&1 || true
     wait "$LOG_PID" >/dev/null 2>&1 || true
   fi
 }
-trap cleanup EXIT
+trap 'cleanup; harness_unlock' EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --configuration)
+      require_option_value "$1" "${2:-}"
+      CONFIGURATION="$2"; shift 2 ;;
     --simulator)
       MODE="simulator"
       if [[ -n "${2:-}" && "${2:-}" != --* ]]; then
@@ -232,6 +241,11 @@ fi
 validate_run_id "$RUN_ID"
 
 require_maestro
+if [[ "$MODE" == device && "$SKIP_INSTALL" -eq 1 && "${OPEN_URL_ONLY:-0}" -eq 0 ]]; then
+  die 2 "Physical qualification requires installing the supplied built app; --skip-install cannot prove its provenance."
+fi
+case "$CONFIGURATION" in Debug|Release) ;; *) die 2 "Invalid configuration" ;; esac
+require_command node
 require_command xcrun
 
 if [[ "$SKIP_BUILD" -eq 1 && "$SKIP_INSTALL" -eq 0 && "$DERIVED_DATA_PROVIDED" -eq 0 ]]; then
@@ -277,20 +291,16 @@ check_metro() {
 }
 
 ensure_booted_simulator() {
-  if [[ "$SIMULATOR" == "booted" ]]; then
-    if xcrun simctl list devices booted | grep -q '(Booted)'; then
-      return 0
-    fi
-
-    die 2 "No booted simulator found. Boot one with 'xcrun simctl boot <udid>' or open Simulator, then rerun."
-  fi
-
-  if xcrun simctl list devices booted | grep -F "$SIMULATOR" | grep -q '(Booted)'; then
-    return 0
-  fi
-
-  die 2 "Simulator '${SIMULATOR}' is not booted. Boot it with: xcrun simctl boot ${SIMULATOR}"
+  local resolved
+  resolved="$(xcrun simctl list devices booted -j | node -e '
+    let data="";process.stdin.on("data",x=>data+=x);process.stdin.on("end",()=>{
+      const devices=Object.values(JSON.parse(data).devices).flat().filter(d=>d.state==="Booted");
+      const wanted=process.argv[1];const xs=devices.filter(d=>wanted==="booted" || d.udid===wanted);
+      if(xs.length!==1)process.exit(2);console.log(xs[0].udid);
+    })' "$SIMULATOR")" || die 2 "Select exactly one booted simulator with --simulator <udid>."
+  SIMULATOR="$resolved"
 }
+
 
 assert_app_bundle_exists() {
   local app_path="$1"
@@ -356,10 +366,36 @@ install_device_app() {
     xcrun devicectl device install app --device "$DEVICE" "$DEVICE_APP_PATH"
 }
 
+verify_simulator_artifact() {
+  INSTALLED_APP="$(xcrun simctl get_app_container "$SIMULATOR" "$BUNDLE_ID" app)"
+  harness_compare_apps "$SIMULATOR_APP_PATH" "$INSTALLED_APP" || die 2 "Installed app provenance failed. Provide the matching --derived-data."
+}
+
+launch_simulator_process() {
+  local launch_output
+  launch_output="$(xcrun simctl launch --terminate-running-process "$SIMULATOR" "$BUNDLE_ID")"
+  APP_PID="${launch_output##*: }"
+  [[ "$APP_PID" =~ ^[0-9]+$ ]] || die 2 "Launch PID unavailable: $launch_output"
+  echo "PID: $APP_PID"
+}
+
+validate_current_process() {
+  if [[ "$MODE" == simulator ]]; then
+    kill -0 "$APP_PID" 2>/dev/null || die 1 "FAIL process_ended pid=$APP_PID"
+    local actual
+    actual="$(ps -p "$APP_PID" -o comm=)"
+    [[ "$actual" == "$INSTALLED_APP/$PROCESS_NAME" ]] || die 1 "FAIL process_identity_changed"
+  else
+    find_device_app_process || die 1 "FAIL device_process_missing"
+    [[ "$DEVICE_PROCESS_PID" == "$APP_PID" ]] || die 1 "FAIL device_process_changed"
+  fi
+  kill -0 "$LOG_PID" 2>/dev/null || die 1 "FAIL log_capture_ended"
+}
+
 start_simulator_log_capture() {
   local predicate
   LOG_FILE="$(mktemp -t nitro-bg-ui-smoke-ios-simulator.XXXXXX.log)"
-  predicate="process == \"${PROCESS_NAME}\" OR eventMessage CONTAINS \"${PROCESS_NAME}\" OR eventMessage CONTAINS \"${BUNDLE_ID}\" OR eventMessage CONTAINS \"${RUN_ID}\" OR eventMessage CONTAINS \"NitroBgUiSmoke\" OR eventMessage CONTAINS \"NitroBgSmoke\""
+  predicate="process == \"${PROCESS_NAME}\""
 
   xcrun simctl spawn "$SIMULATOR" log stream \
     --style compact \
@@ -371,12 +407,103 @@ start_simulator_log_capture() {
   echo "Log capture: simctl log stream -> ${LOG_FILE}"
 }
 
+find_device_app_process() {
+  local json_path
+  local output_path
+  local status
+  local pid
+
+  DEVICE_PROCESS_PID=""
+  json_path="$(mktemp -t nitro-bg-smoke-ios-processes.XXXXXX.json)"
+  output_path="$(mktemp -t nitro-bg-smoke-ios-processes.XXXXXX.log)"
+
+  set +e
+  xcrun devicectl device info processes \
+    --device "$DEVICE" \
+    --timeout 10 \
+    --json-output "$json_path" \
+    >"$output_path" 2>&1
+  status=$?
+  set -e
+
+  if [[ "$status" -ne 0 ]]; then
+    echo "Could not inspect running processes for device ${DEVICE}." >&2
+    echo "Make sure the device is connected, unlocked, trusted, and available to devicectl." >&2
+    tail -n 40 "$output_path" >&2 || true
+    rm -f "$json_path" "$output_path"
+    return 2
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    # devicectl JSON is the stable interface, but process field names have
+    # varied across Xcode releases. Match known bundle/process name fields and
+    # only treat numeric process identifiers as terminable PIDs.
+    pid="$(
+      jq -r --arg bundle "$BUNDLE_ID" --arg name "$PROCESS_NAME" '
+        def matches_app:
+          (.bundleIdentifier? == $bundle)
+          or (.bundleID? == $bundle)
+          or (.bundleId? == $bundle)
+          or (.applicationIdentifier? == $bundle)
+          or (.name? == $name)
+          or (.processName? == $name)
+          or (.executableName? == $name)
+          or (((.executable? // "") | tostring | endswith("/" + $name)) == true)
+          or (((.path? // "") | tostring | endswith("/" + $name)) == true);
+
+        [.. | objects | select(matches_app) | (.processIdentifier? // .pid? // .processID? // empty)]
+        | map(tostring)
+        | map(select(test("^[0-9]+$")))
+        | first // empty
+      ' "$json_path" 2>/dev/null || true
+    )"
+
+    if [[ -n "$pid" ]]; then
+      DEVICE_PROCESS_PID="$pid"
+      rm -f "$json_path" "$output_path"
+      return 0
+    fi
+
+    if jq -e --arg bundle "$BUNDLE_ID" --arg name "$PROCESS_NAME" '
+      def matches_app:
+        (.bundleIdentifier? == $bundle)
+        or (.bundleID? == $bundle)
+        or (.bundleId? == $bundle)
+        or (.applicationIdentifier? == $bundle)
+        or (.name? == $name)
+        or (.processName? == $name)
+        or (.executableName? == $name)
+        or (((.executable? // "") | tostring | endswith("/" + $name)) == true)
+        or (((.path? // "") | tostring | endswith("/" + $name)) == true);
+
+      [.. | objects | select(matches_app)] | length > 0
+    ' "$json_path" >/dev/null 2>&1; then
+      rm -f "$json_path" "$output_path"
+      return 0
+    fi
+  fi
+
+  # Fallback for hosts without jq or unexpected JSON shape. This can only
+  # answer "running/not running"; it cannot safely provide a PID to terminate.
+  if grep -F "$BUNDLE_ID" "$json_path" >/dev/null 2>&1 ||
+    grep -F "$PROCESS_NAME" "$json_path" >/dev/null 2>&1 ||
+    grep -F "$BUNDLE_ID" "$output_path" >/dev/null 2>&1 ||
+    grep -F "$PROCESS_NAME" "$output_path" >/dev/null 2>&1; then
+    rm -f "$json_path" "$output_path"
+    return 0
+  fi
+
+  rm -f "$json_path" "$output_path"
+  return 1
+}
+
 start_device_log_capture() {
   LOG_FILE="$(mktemp -t nitro-bg-ui-smoke-ios-device.XXXXXX.log)"
 
   xcrun devicectl device process launch \
     --device "$DEVICE" \
     --console \
+    --terminate-existing \
     "$BUNDLE_ID" \
     >"$LOG_FILE" 2>&1 &
   LOG_PID="$!"
@@ -424,98 +551,60 @@ run_maestro_flow() {
 
   set +e
   echo "Maestro APP_ID: ${BUNDLE_ID}"
-  maestro "${maestro_args[@]}" >"$MAESTRO_LOG_FILE" 2>&1
+  harness_ui_flow "${maestro_args[@]}" >"$MAESTRO_LOG_FILE" 2>&1
   status=$?
   set -e
 
   if [[ "$status" -ne 0 ]]; then
-    echo "FAIL runId=${RUN_ID} maestro_failed exit=${status}" >&2
+    harness_validate "$LOG_FILE" "$RUN_ID" ios "$APP_PID" "$FLOW" poll "$PROCESS_NAME" || true
+    echo "HARNESS/TOOLING FAIL runId=${RUN_ID} maestro_failed exit=${status}" >&2
     tail -n 80 "$MAESTRO_LOG_FILE" >&2 || true
     echo "Maestro log: ${MAESTRO_LOG_FILE}" >&2
     exit 1
   fi
 }
 
-expected_markers_main=(
-  "section=set-timeout action=schedule"
-  "section=set-timeout action=cancel"
-  "section=set-interval action=start"
-  "section=set-interval action=stop"
-  "section=set-interval action=reset"
-  "section=background action=js-comparison"
-  "section=background action=configure-notification"
-  "section=background action=start-mode"
-  "section=background action=stop-mode"
-  "section=background action=start"
-  "section=background action=stop"
-  "section=concurrent action=start-all"
-  "section=concurrent action=stop-all"
-  "section=cleanup action=mount"
-  "section=cleanup action=unmount"
-  "section=hook action=start"
-  "section=hook action=restart"
-  "section=hook action=stop"
-  "section=stress action=create-100"
-  "section=core-smoke action=run"
-)
+validate_ui_progress() {
+  local status=0
+  validate_current_process
+  harness_validate "$LOG_FILE" "$RUN_ID" ios "$APP_PID" "$FLOW" poll "$PROCESS_NAME" || status=$?
+  [[ "$status" -eq 3 ]] || [[ "$status" -eq 0 ]] || return "$status"
+}
 
-expected_markers_fgs_optout=(
-  "section=background action=disable-fgs"
-)
-
-poll_markers() {
-  local deadline=$((SECONDS + TIMEOUT_SECONDS))
-  local fail_line
-  local error_line
-  local missing=()
-  local expected_markers=()
-
-  if [[ "$FLOW" == "main" ]]; then
-    expected_markers=("${expected_markers_main[@]}")
-  else
-    expected_markers=("${expected_markers_fgs_optout[@]}")
-  fi
-
+wait_for_ui_context() {
+  local deadline=$((SECONDS + 30)) status
   while (( SECONDS < deadline )); do
-    if fail_line="$(grep -F "[NitroBgUiSmoke] FAIL runId=${RUN_ID}" "$LOG_FILE" | tail -n 1)"; then
-      echo "FAIL runId=${RUN_ID}"
-      echo "$fail_line"
-      return 1
-    fi
-
-    if error_line="$(grep -E "$RUNTIME_ERROR_PATTERN" "$LOG_FILE" | tail -n 1)"; then
-      echo "FAIL runId=${RUN_ID} runtime_error_detected"
-      echo "$error_line"
-      return 1
-    fi
-
-    missing=()
-    for marker in "${expected_markers[@]}"; do
-      if ! grep -F "[NitroBgUiSmoke] PASS runId=${RUN_ID} ${marker}" "$LOG_FILE" >/dev/null 2>&1; then
-        missing+=("$marker")
-      fi
-    done
-
-    if [[ "${#missing[@]}" -eq 0 ]]; then
-      echo "PASS runId=${RUN_ID} flow=${FLOW}"
-      echo "Log: ${LOG_FILE}"
-      return 0
-    fi
-
+    validate_current_process
+    status=0
+    harness_validate "$LOG_FILE" "$RUN_ID" ios "$APP_PID" "$FLOW" poll "$PROCESS_NAME" || status=$?
+    [[ "$status" -eq 3 ]] || [[ "$status" -eq 0 ]] || return "$status"
+    if grep -F "[NitroBgUiSmoke] CONTEXT runId=$RUN_ID mode=ui" "$LOG_FILE" >/dev/null; then return 0; fi
     sleep 0.25
   done
+  die 124 "TIMEOUT UI context runId=$RUN_ID log=$LOG_FILE"
+}
 
-  echo "TIMEOUT runId=${RUN_ID} after ${TIMEOUT_SECONDS}s waiting for UI smoke markers" >&2
-  echo "Missing markers:" >&2
-  printf '  %s\n' "${missing[@]}" >&2
-  grep -F "$RUN_ID" "$LOG_FILE" | tail -n 80 >&2 || true
-  echo "Full log: ${LOG_FILE}" >&2
-  echo "Maestro log: ${MAESTRO_LOG_FILE}" >&2
-  return 124
+poll_markers() {
+  local deadline=$((SECONDS + TIMEOUT_SECONDS)) status
+  while (( SECONDS < deadline )); do
+    validate_current_process
+    status=0
+    harness_validate "$LOG_FILE" "$RUN_ID" ios "$APP_PID" "$FLOW" poll "$PROCESS_NAME" || status=$?
+    if [[ "$status" -eq 0 ]]; then
+      if [[ "$MODE" == simulator ]]; then verify_simulator_artifact; fi
+      validate_current_process
+      harness_validate "$LOG_FILE" "$RUN_ID" ios "$APP_PID" "$FLOW" final "$PROCESS_NAME"
+      echo "PASS runId=$RUN_ID pid=$APP_PID flow=$FLOW log=$LOG_FILE maestro=$MAESTRO_LOG_FILE"
+      return 0
+    fi
+    [[ "$status" -eq 3 ]] || return "$status"
+    sleep 0.25
+  done
+  die 124 "TIMEOUT UI markers runId=$RUN_ID log=$LOG_FILE maestro=$MAESTRO_LOG_FILE"
 }
 
 ensure_workspace_exists
-check_metro
+if [[ "$CONFIGURATION" == Debug ]]; then check_metro; fi
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   require_command xcodebuild
@@ -523,6 +612,7 @@ fi
 
 if [[ "$MODE" == "simulator" ]]; then
   ensure_booted_simulator
+  harness_lock ios "$SIMULATOR" "$RUN_ID"
   echo "iOS simulator UI smoke runId=${RUN_ID} simulator=${SIMULATOR} flow=${FLOW}"
   echo "URL: ${SMOKE_URL}"
   echo "DerivedData: ${DERIVED_DATA_PATH}"
@@ -539,9 +629,16 @@ if [[ "$MODE" == "simulator" ]]; then
     echo "Skipping simulator install by request; existing installed app will be tested."
   fi
 
-  xcrun simctl terminate "$SIMULATOR" "$BUNDLE_ID" >/dev/null 2>&1 || true
+  verify_simulator_artifact
   start_simulator_log_capture
+  launch_simulator_process
+  harness_ios_dialogs "$SIMULATOR" "$BUNDLE_ID" prepare
+  status=0
+  harness_validate "$LOG_FILE" "$RUN_ID" ios "$APP_PID" "$FLOW" poll "$PROCESS_NAME" || status=$?
+  [[ "$status" -eq 3 ]] || die 1 "FAIL unexpected_execution_before_current_URL"
   open_smoke_url
+  harness_ios_dialogs "$SIMULATOR" "$BUNDLE_ID" confirm
+  wait_for_ui_context
   run_maestro_flow
   poll_markers
   exit $?
@@ -551,6 +648,7 @@ if [[ -z "$DEVICE" ]]; then
   die 2 "--device requires a physical device identifier."
 fi
 
+harness_lock ios "$DEVICE" "$RUN_ID"
 echo "iOS device UI smoke runId=${RUN_ID} device=${DEVICE} flow=${FLOW}"
 echo "URL: ${SMOKE_URL}"
 echo "DerivedData: ${DERIVED_DATA_PATH}"
@@ -568,7 +666,11 @@ else
 fi
 
 start_device_log_capture
+find_device_app_process || die 1 "FAIL device_pid_unavailable"
+APP_PID="$DEVICE_PROCESS_PID"
+echo "PID: $APP_PID"
 open_smoke_url
+wait_for_ui_context
 run_maestro_flow
 poll_markers
 exit $?

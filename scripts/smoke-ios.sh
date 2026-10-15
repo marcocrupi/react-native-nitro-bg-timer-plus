@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/smoke-android.sh"
+APP_PID=""
+INSTALLED_APP=""
+
 BUNDLE_ID="org.reactjs.native.example.NitroBgTimerExample"
 PROCESS_NAME="NitroBgTimerExample"
 WORKSPACE="example/ios/NitroBgTimerExample.xcworkspace"
@@ -16,15 +21,16 @@ XCODEBUILD_DEVICE_ID=""
 RUN_ID=""
 OPEN_URL_ONLY=0
 SKIP_BUILD=0
+SIMULATOR_DIALOGS=0
 SKIP_INSTALL=0
-TERMINATE_EXISTING=0
+TERMINATE_EXISTING=1
 DERIVED_DATA_PATH=""
 DERIVED_DATA_PROVIDED=0
 METRO_PORT="${RCT_METRO_PORT:-8081}"
 LAUNCH_STRATEGY="launch-then-open-url"
 DEVICE_BOOT_WAIT_SECONDS=3
 SMOKE_RUN_ID_PATTERN='^[A-Za-z0-9._-]{1,80}$'
-RUNTIME_ERROR_PATTERN='NativeEventEmitter|RCTEventEmitter|RedBox|ReactNativeJS[[:space:]:]+Error|SIGABRT|std::terminate|Fatal error|RCTFatal|NSException|Terminating app'
+RUNTIME_ERROR_PATTERN='SIGABRT|std::terminate|Fatal error:|RCTFatal|uncaught exception|Terminating app due to'
 
 LOG_FILE=""
 LOG_PID=""
@@ -42,6 +48,9 @@ Modes:
   Manual open only:    bash scripts/smoke-ios.sh [--device <udid>] --open-url-only
 
 Options:
+  --simulator-dialogs      Use installed Maestro to resolve this app's initial
+                           prompts, cancelling stale URLs before sending one URL.
+  --configuration <name>  Debug or Release. Default: Debug.
   --simulator [udid]       Use a booted simulator. Defaults to "booted".
   --device <id>            Use a physical device via xcrun devicectl.
   --xcodebuild-device-id <id>
@@ -49,11 +58,12 @@ Options:
                            Use this when devicectl and xcodebuild expose different
                            identifiers for the same physical device.
   --run-id <id>            Smoke run id, matching [A-Za-z0-9._-]{1,80}.
-  --timeout <sec>          Result timeout. Default: 45s simulator, 60s device.
+  --timeout <sec>          Result timeout and optional Maestro command bound.
+                           Default: 45s simulator, 60s device.
   --skip-build             Do not run xcodebuild.
   --skip-install           Do not install the built app.
   --derived-data <path>    DerivedData path for xcodebuild and app lookup.
-  --terminate-existing     Terminate only the example app if it is already running.
+  --terminate-existing     Accepted for compatibility; fresh process is the default.
   --open-url-only          Open the smoke deep link only; no build/install/log wait.
   --bundle-id <id>         App bundle id. Default: org.reactjs.native.example.NitroBgTimerExample.
   --metro-port <port>      Metro port for the preflight check. Default: 8081.
@@ -65,7 +75,7 @@ Automated mode:
   - Verifies Metro at http://127.0.0.1:<port>/status.
   - Builds Debug example app into a temporary DerivedData path by default.
   - Installs the resulting .app before launching, unless --skip-install is set.
-  - Fails if the example app is already running unless --terminate-existing is set.
+  - Starts a fresh one-shot app process; run ids are single-use per target.
   - Device mode launches with console attached, then sends the deep link separately
     by default. Use --launch-strategy payload-at-launch to use the legacy single
     launch command with --payload-url.
@@ -129,6 +139,7 @@ run_logged() {
 }
 
 cleanup() {
+  if [[ -n "${LOG_FILE:-}" ]]; then echo "Log: $LOG_FILE"; fi
   if [[ -n "$LOG_PID" ]]; then
     kill "$LOG_PID" >/dev/null 2>&1 || true
 
@@ -146,10 +157,14 @@ cleanup() {
     LOG_PID=""
   fi
 }
-trap cleanup EXIT
+trap 'cleanup; harness_unlock' EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --simulator-dialogs) SIMULATOR_DIALOGS=1; shift ;;
+    --configuration)
+      require_option_value "$1" "${2:-}"
+      CONFIGURATION="$2"; shift 2 ;;
     --simulator)
       MODE="simulator"
       if [[ -n "${2:-}" && "${2:-}" != --* ]]; then
@@ -230,6 +245,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$MODE" == device && "$SKIP_INSTALL" -eq 1 && "${OPEN_URL_ONLY:-0}" -eq 0 ]]; then
+  die 2 "Physical qualification requires installing the supplied built app; --skip-install cannot prove its provenance."
+fi
+case "$CONFIGURATION" in Debug|Release) ;; *) die 2 "Invalid configuration" ;; esac
+require_command node
 require_command xcrun
 
 if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || (( TIMEOUT_SECONDS <= 0 )); then
@@ -283,20 +303,16 @@ check_metro() {
 }
 
 ensure_booted_simulator() {
-  if [[ "$SIMULATOR" == "booted" ]]; then
-    if xcrun simctl list devices booted | grep -q '(Booted)'; then
-      return 0
-    fi
-
-    die 2 "No booted simulator found. Boot one with 'xcrun simctl boot <udid>' or open Simulator, then rerun."
-  fi
-
-  if xcrun simctl list devices booted | grep -F "$SIMULATOR" | grep -q '(Booted)'; then
-    return 0
-  fi
-
-  die 2 "Simulator '${SIMULATOR}' is not booted. Boot it with: xcrun simctl boot ${SIMULATOR}"
+  local resolved
+  resolved="$(xcrun simctl list devices booted -j | node -e '
+    let data="";process.stdin.on("data",x=>data+=x);process.stdin.on("end",()=>{
+      const devices=Object.values(JSON.parse(data).devices).flat().filter(d=>d.state==="Booted");
+      const wanted=process.argv[1];const xs=devices.filter(d=>wanted==="booted" || d.udid===wanted);
+      if(xs.length!==1)process.exit(2);console.log(xs[0].udid);
+    })' "$SIMULATOR")" || die 2 "Select exactly one booted simulator with --simulator <udid>."
+  SIMULATOR="$resolved"
 }
+
 
 ensure_device_available() {
   local json_path
@@ -605,7 +621,7 @@ ensure_device_app_installed() {
 is_simulator_app_running() {
   # Simulator process lookup uses pgrep inside the booted simulator runtime.
   # simctl has no stable JSON process API, so this intentionally stays narrow.
-  xcrun simctl spawn "$SIMULATOR" pgrep -f "$PROCESS_NAME" >/dev/null 2>&1
+  [[ -n "$INSTALLED_APP" ]] && pgrep -f "^${INSTALLED_APP}/${PROCESS_NAME}( |$)" >/dev/null 2>&1
 }
 
 find_device_app_process() {
@@ -746,9 +762,9 @@ wait_for_device_app_exit() {
     if find_device_app_process; then
       sleep 0.5
       continue
+    else
+      status=$?
     fi
-
-    status=$?
     if [[ "$status" -eq 1 ]]; then
       return 0
     fi
@@ -804,11 +820,37 @@ open_smoke_url_only() {
     "$BUNDLE_ID"
 }
 
+verify_simulator_artifact() {
+  INSTALLED_APP="$(xcrun simctl get_app_container "$SIMULATOR" "$BUNDLE_ID" app)"
+  harness_compare_apps "$SIMULATOR_APP_PATH" "$INSTALLED_APP" || die 2 "Installed app provenance failed. Provide the matching --derived-data."
+}
+
+launch_simulator_process() {
+  local launch_output
+  launch_output="$(xcrun simctl launch --terminate-running-process "$SIMULATOR" "$BUNDLE_ID")"
+  APP_PID="${launch_output##*: }"
+  [[ "$APP_PID" =~ ^[0-9]+$ ]] || die 2 "Launch PID unavailable: $launch_output"
+  echo "PID: $APP_PID"
+}
+
+validate_current_process() {
+  if [[ "$MODE" == simulator ]]; then
+    kill -0 "$APP_PID" 2>/dev/null || die 1 "FAIL process_ended pid=$APP_PID"
+    local actual
+    actual="$(ps -p "$APP_PID" -o comm=)"
+    [[ "$actual" == "$INSTALLED_APP/$PROCESS_NAME" ]] || die 1 "FAIL process_identity_changed"
+  else
+    find_device_app_process || die 1 "FAIL device_process_missing"
+    [[ "$DEVICE_PROCESS_PID" == "$APP_PID" ]] || die 1 "FAIL device_process_changed"
+  fi
+  kill -0 "$LOG_PID" 2>/dev/null || die 1 "FAIL log_capture_ended"
+}
+
 start_simulator_log_capture() {
   local predicate
   LOG_FILE="$(mktemp -t nitro-bg-smoke-ios-simulator.XXXXXX.log)"
   LOG_CAPTURE_KIND="simctl log stream"
-  predicate="process == \"${PROCESS_NAME}\" OR eventMessage CONTAINS \"${RUN_ID}\" OR eventMessage CONTAINS \"NitroBgSmoke\" OR eventMessage CONTAINS \"NativeEventEmitter\" OR eventMessage CONTAINS \"RCTEventEmitter\" OR eventMessage CONTAINS \"RedBox\" OR eventMessage CONTAINS \"ReactNativeJS\" OR eventMessage CONTAINS \"Fatal error\""
+  predicate="process == \"${PROCESS_NAME}\""
 
   xcrun simctl spawn "$SIMULATOR" log stream \
     --style compact \
@@ -1006,7 +1048,7 @@ print_timeout_diagnostics() {
       elif grep -F "[NitroBgSmokeNative]" "$LOG_FILE" >/dev/null 2>&1; then
         echo "Native smoke markers were observed, but none matched runId=${RUN_ID}." >&2
       elif [[ "$URL_SENT" -eq 1 ]]; then
-        echo "No [NitroBgSmoke] or [NitroBgSmokeNative] marker captured. This may indicate URL delivery failure or console capture failure." >&2
+        echo "No marker captured. Check URL delivery, console capture and first-launch permission dialogs for this app; resolve the precondition and use a fresh run id." >&2
       else
         echo "No smoke marker captured, and the smoke URL was not marked as sent." >&2
       fi
@@ -1042,190 +1084,30 @@ print_timeout_diagnostics() {
   esac
 }
 
-smoke_marker_line() {
-  local marker="$1"
-
-  if [[ -z "$LOG_FILE" || ! -f "$LOG_FILE" ]]; then
-    return 1
-  fi
-
-  grep -F "$marker" "$LOG_FILE" |
-    grep -F "runId=${RUN_ID}" |
-    tail -n 1
-}
-
-marker_value() {
-  local line="$1"
-  local key="$2"
-  local value
-
-  value="$(
-    printf '%s\n' "$line" |
-      sed -n "s/.*${key}=\([^[:space:]]*\).*/\1/p" |
-      tail -n 1
-  )"
-
-  if [[ -z "$value" ]]; then
-    echo "unknown"
-    return 0
-  fi
-
-  echo "$value"
-}
-
-validate_ios_smoke_markers() {
-  local arch_line
-  local event_module_line
-  local event_listener_line
-  local timeout_line
-  local interval_line
-  local event_delivery_line
-  local event_delivery_ok_line
-  local missing=0
-  local new_arch
-  local bridgeless
-  local event_module_present
-  local event_listener_installed
-  local timeout_fired
-  local interval_fired
-  local delivery_status
-  local event_delivery_ok
-  local event_signal_observed
-  local event_signal_count
-
-  arch_line="$(smoke_marker_line "[NitroBgSmoke] IOS_ARCH" || true)"
-  event_module_line="$(smoke_marker_line "[NitroBgSmoke] IOS_EVENT_MODULE" || true)"
-  event_listener_line="$(smoke_marker_line "[NitroBgSmoke] IOS_EVENT_LISTENER" || true)"
-  timeout_line="$(smoke_marker_line "[NitroBgSmoke] IOS_TIMER runId=${RUN_ID} marker=ios-timeout-fired" || true)"
-  interval_line="$(smoke_marker_line "[NitroBgSmoke] IOS_TIMER runId=${RUN_ID} marker=ios-interval-fired" || true)"
-  event_delivery_line="$(smoke_marker_line "[NitroBgSmoke] IOS_EVENT_DELIVERY runId=${RUN_ID}" || true)"
-  event_delivery_ok_line="$(smoke_marker_line "[NitroBgSmoke] IOS_EVENT_DELIVERY_OK runId=${RUN_ID}" || true)"
-
-  if [[ -z "$arch_line" ]]; then
-    echo "FAIL runId=${RUN_ID} missing_marker=IOS_ARCH"
-    missing=1
-  fi
-  if [[ -z "$event_module_line" ]]; then
-    echo "FAIL runId=${RUN_ID} missing_marker=IOS_EVENT_MODULE"
-    missing=1
-  fi
-  if [[ -z "$event_listener_line" ]]; then
-    echo "FAIL runId=${RUN_ID} missing_marker=IOS_EVENT_LISTENER"
-    missing=1
-  fi
-  if [[ -z "$timeout_line" ]]; then
-    echo "FAIL runId=${RUN_ID} missing_marker=ios-timeout-fired"
-    missing=1
-  fi
-  if [[ -z "$interval_line" ]]; then
-    echo "FAIL runId=${RUN_ID} missing_marker=ios-interval-fired"
-    missing=1
-  fi
-  if [[ -z "$event_delivery_line" ]]; then
-    echo "FAIL runId=${RUN_ID} missing_marker=IOS_EVENT_DELIVERY"
-    missing=1
-  fi
-  if [[ -z "$event_delivery_ok_line" ]]; then
-    echo "FAIL runId=${RUN_ID} missing_marker=IOS_EVENT_DELIVERY_OK"
-    missing=1
-  fi
-
-  if [[ "$missing" -ne 0 ]]; then
-    return 1
-  fi
-
-  new_arch="$(marker_value "$arch_line" "newArch")"
-  bridgeless="$(marker_value "$arch_line" "bridgeless")"
-  event_module_present="$(marker_value "$event_module_line" "nativeModulePresent")"
-  event_listener_installed="$(marker_value "$event_listener_line" "installed")"
-  timeout_fired="$(marker_value "$event_delivery_line" "timeoutFired")"
-  interval_fired="$(marker_value "$event_delivery_line" "intervalFired")"
-  delivery_status="$(marker_value "$event_delivery_line" "status")"
-  event_signal_observed="$(marker_value "$event_delivery_line" "eventSignalObserved")"
-  event_signal_count="$(marker_value "$event_delivery_line" "eventSignalCount")"
-
-  event_delivery_ok="false"
-  if [[ "$timeout_fired" == "true" && "$interval_fired" == "true" && "$delivery_status" == "ok" ]]; then
-    event_delivery_ok="true"
-  fi
-
-  echo "IOS_DIAGNOSTICS runId=${RUN_ID} archMarker=yes newArch=${new_arch} bridgeless=${bridgeless} eventModulePresent=${event_module_present} eventListenerInstalled=${event_listener_installed} timeoutFired=${timeout_fired} intervalFired=${interval_fired} eventSignalObserved=${event_signal_observed} eventSignalCount=${event_signal_count} eventDeliveryOk=${event_delivery_ok}"
-
-  if [[ "$event_module_present" != "true" ]]; then
-    echo "FAIL runId=${RUN_ID} ios_event_module_missing"
-    return 1
-  fi
-
-  if [[ "$event_listener_installed" != "true" ]]; then
-    echo "FAIL runId=${RUN_ID} ios_event_listener_missing"
-    return 1
-  fi
-
-  if [[ "$event_delivery_ok" != "true" ]]; then
-    echo "FAIL runId=${RUN_ID} ios_event_delivery_incomplete"
-    return 1
-  fi
-
-  return 0
-}
-
 poll_result() {
-  local deadline=$((SECONDS + TIMEOUT_SECONDS))
-  local capture_status
-  local fail_line
-  local error_line
-  local phase
-
+  local deadline=$((SECONDS + TIMEOUT_SECONDS)) status
+  if [[ "$MODE" == device ]]; then
+    find_device_app_process || die 1 "FAIL device_pid_unavailable"
+    APP_PID="$DEVICE_PROCESS_PID"
+    [[ "$APP_PID" =~ ^[0-9]+$ ]] || die 1 "FAIL device_pid_unavailable"
+    echo "PID: $APP_PID"
+  fi
   while (( SECONDS < deadline )); do
-    if grep -F "[NitroBgSmoke] RESULT PASS runId=${RUN_ID}" "$LOG_FILE" >/dev/null 2>&1; then
-      if ! validate_ios_smoke_markers; then
-        return 1
-      fi
-
-      echo "PASS runId=${RUN_ID}"
+    validate_current_process
+    status=0
+    harness_validate "$LOG_FILE" "$RUN_ID" ios "$APP_PID" core poll "$PROCESS_NAME" || status=$?
+    if [[ "$status" -eq 0 ]]; then
+      if [[ "$MODE" == simulator ]]; then verify_simulator_artifact; fi
+      validate_current_process
+      harness_validate "$LOG_FILE" "$RUN_ID" ios "$APP_PID" core final "$PROCESS_NAME"
+      echo "PASS runId=$RUN_ID pid=$APP_PID log=$LOG_FILE"
       return 0
     fi
-
-    if fail_line="$(grep -F "[NitroBgSmoke] RESULT FAIL runId=${RUN_ID}" "$LOG_FILE" | tail -n 1)"; then
-      echo "FAIL runId=${RUN_ID}"
-      echo "$fail_line"
-      return 1
-    fi
-
-    if fail_line="$(grep -F "[NitroBgSmoke] STEP FAIL runId=${RUN_ID}" "$LOG_FILE" | tail -n 1)"; then
-      echo "FAIL runId=${RUN_ID}"
-      echo "$fail_line"
-      return 1
-    fi
-
-    if error_line="$(grep -E "$RUNTIME_ERROR_PATTERN" "$LOG_FILE" | tail -n 1)"; then
-      echo "FAIL runId=${RUN_ID} runtime_error_detected"
-      echo "$error_line"
-      return 1
-    fi
-
-    if [[ -n "$LOG_PID" ]] && ! kill -0 "$LOG_PID" >/dev/null 2>&1; then
-      set +e
-      wait "$LOG_PID"
-      capture_status=$?
-      set -e
-      LOG_PID=""
-      set +e
-      classify_finished_capture "$capture_status"
-      local classified_status=$?
-      set -e
-      return "$classified_status"
-    fi
-
+    [[ "$status" -eq 3 ]] || return "$status"
     sleep 0.25
   done
-
-  echo "TIMEOUT runId=${RUN_ID} after ${TIMEOUT_SECONDS}s" >&2
-  phase="$(last_smoke_phase)"
-  print_timeout_diagnostics "$phase"
-  echo "Log source: ${LOG_CAPTURE_KIND:-none}" >&2
-  grep -F "$RUN_ID" "$LOG_FILE" | tail -n 40 >&2 || true
-  echo "Full log: ${LOG_FILE}" >&2
+  echo "TIMEOUT runId=$RUN_ID log=$LOG_FILE" >&2
+  print_timeout_diagnostics "$(last_smoke_phase)"
   return 124
 }
 
@@ -1259,7 +1141,8 @@ require_command xcodebuild
 
 if [[ "$MODE" == "simulator" ]]; then
   ensure_booted_simulator
-  check_metro
+  harness_lock ios "$SIMULATOR" "$RUN_ID"
+  if [[ "$CONFIGURATION" == Debug ]]; then check_metro; fi
 
   echo "iOS simulator smoke runId=${RUN_ID} simulator=${SIMULATOR}"
   echo "URL: ${SMOKE_URL}"
@@ -1281,7 +1164,15 @@ if [[ "$MODE" == "simulator" ]]; then
   fi
 
   handle_existing_simulator_app
+  verify_simulator_artifact
   start_simulator_log_capture
+  launch_simulator_process
+  if [[ "$SIMULATOR_DIALOGS" -eq 1 ]]; then
+    harness_ios_dialogs "$SIMULATOR" "$BUNDLE_ID" prepare
+    status=0
+    harness_validate "$LOG_FILE" "$RUN_ID" ios "$APP_PID" core poll "$PROCESS_NAME" || status=$?
+    [[ "$status" -eq 3 ]] || die 1 "FAIL unexpected_execution_before_current_URL"
+  fi
 
   echo "Opening ${SMOKE_URL}"
   if ! xcrun simctl openurl "$SIMULATOR" "$SMOKE_URL"; then
@@ -1289,6 +1180,7 @@ if [[ "$MODE" == "simulator" ]]; then
     exit 2
   fi
   URL_SENT=1
+  if [[ "$SIMULATOR_DIALOGS" -eq 1 ]]; then harness_ios_dialogs "$SIMULATOR" "$BUNDLE_ID" confirm; fi
 
   echo "Waiting up to ${TIMEOUT_SECONDS}s for [NitroBgSmoke] RESULT runId=${RUN_ID}"
   poll_result
@@ -1300,7 +1192,7 @@ if [[ -z "$DEVICE" ]]; then
 fi
 
 ensure_device_available
-check_metro
+if [[ "$CONFIGURATION" == Debug ]]; then check_metro; fi
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   resolve_xcodebuild_device_id
@@ -1318,6 +1210,7 @@ echo "DerivedData: ${DERIVED_DATA_PATH}"
 echo "Launch strategy: ${LAUNCH_STRATEGY}"
 echo "Physical iOS backgrounding is manual/XCUITest follow-up; this runner launches the foreground smoke."
 
+harness_lock ios "$DEVICE" "$RUN_ID"
 handle_existing_device_app
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then

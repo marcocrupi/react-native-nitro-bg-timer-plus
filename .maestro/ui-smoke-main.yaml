@@ -4,11 +4,15 @@ appId: "${APP_ID}"
     visible:
       id: ui-smoke-set-timeout-schedule
     timeout: 10000
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-set-timeout-schedule
 - extendedWaitUntil:
     visible:
       id: ui-smoke-set-timeout-status-fired
+    timeout: 5000
+- waitForAnimationToEnd:
     timeout: 5000
 - tapOn:
     id: ui-smoke-set-timeout-schedule
@@ -23,14 +27,20 @@ appId: "${APP_ID}"
       id: ui-smoke-set-timeout-status-cancelled
     timeout: 5000
 
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-set-interval-start
 - extendedWaitUntil:
     visible:
       id: ui-smoke-set-interval-ticked
     timeout: 5000
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-set-interval-stop
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-set-interval-reset
 
@@ -39,6 +49,8 @@ appId: "${APP_ID}"
       id: ui-smoke-background-js-comparison
     direction: DOWN
     timeout: 10000
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-background-js-comparison
 - scrollUntilVisible:
@@ -47,21 +59,33 @@ appId: "${APP_ID}"
     direction: DOWN
     centerElement: true
     timeout: 10000
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-background-configure-notification
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     text: "OK"
     optional: true
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-background-start-mode
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-background-stop-mode
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-background-start
 - extendedWaitUntil:
     visible:
-      id: ui-smoke-background-native-1
+      id: 'ui-smoke-background-native-[1-9][0-9]*'
     timeout: 6000
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-background-stop
 
@@ -70,6 +94,8 @@ appId: "${APP_ID}"
       id: ui-smoke-concurrent-start-all
     direction: DOWN
     timeout: 10000
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-concurrent-start-all
 - waitForAnimationToEnd:
@@ -83,40 +109,84 @@ appId: "${APP_ID}"
     direction: DOWN
     centerElement: true
     timeout: 10000
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-cleanup-mount
 - extendedWaitUntil:
     visible:
       id: ui-smoke-cleanup-tick-observed
     timeout: 6000
-- tapOn:
-    id: ui-smoke-cleanup-unmount
+- waitForAnimationToEnd:
+    timeout: 5000
+- retry:
+    maxRetries: 1
+    commands:
+      - runFlow:
+          when:
+            visible:
+              id: ui-smoke-cleanup-unmount
+          commands:
+            - tapOn:
+                id: ui-smoke-cleanup-unmount
+                point: '50%,50%'
+      - extendedWaitUntil:
+          visible:
+            id: ui-smoke-cleanup-mount
+          timeout: 5000
 
 - scrollUntilVisible:
     element:
       id: ui-smoke-hook-start
     direction: DOWN
+    centerElement: true
     timeout: 10000
-- tapOn:
-    id: ui-smoke-hook-start
-- extendedWaitUntil:
-    visible:
-      id: ui-smoke-hook-tick-observed
-    timeout: 6000
+- waitForAnimationToEnd:
+    timeout: 5000
+- retry:
+    maxRetries: 1
+    commands:
+      - runFlow:
+          when:
+            visible:
+              id: ui-smoke-hook-status-stopped
+          commands:
+            - tapOn:
+                id: ui-smoke-hook-start
+                point: '50%,50%'
+      - extendedWaitUntil:
+          visible:
+            id: ui-smoke-hook-tick-observed
+          timeout: 6000
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-hook-restart
+    point: '50%,50%'
 - extendedWaitUntil:
     visible:
       id: ui-smoke-hook-restart-tick-observed
     timeout: 6000
-- tapOn:
-    id: ui-smoke-hook-stop
+- waitForAnimationToEnd:
+    timeout: 5000
+- retry:
+    maxRetries: 1
+    commands:
+      - tapOn:
+          id: ui-smoke-hook-stop
+          point: '50%,50%'
+      - extendedWaitUntil:
+          visible:
+            id: ui-smoke-hook-status-stopped
+          timeout: 5000
 
 - scrollUntilVisible:
     element:
       id: ui-smoke-stress-create-100
     direction: DOWN
     timeout: 10000
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn:
     id: ui-smoke-stress-create-100
 - extendedWaitUntil:
@@ -132,9 +202,25 @@ appId: "${APP_ID}"
     element:
       id: ui-smoke-core-run
     direction: DOWN
+    centerElement: true
     timeout: 10000
-- tapOn:
-    id: ui-smoke-core-run
+- waitForAnimationToEnd:
+    timeout: 5000
+- retry:
+    maxRetries: 1
+    commands:
+      - runFlow:
+          when:
+            visible:
+              id: ui-smoke-core-status-idle
+          commands:
+            - tapOn:
+                id: ui-smoke-core-run
+                point: '50%,50%'
+      - extendedWaitUntil:
+          visible:
+            id: 'ui-smoke-core-status-(running|pass)'
+          timeout: 5000
 - extendedWaitUntil:
     visible:
       id: ui-smoke-core-status-pass
