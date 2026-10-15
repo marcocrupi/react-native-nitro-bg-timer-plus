@@ -589,18 +589,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
         return
       }
 
-      if (firedTimerQueue.size >= MAX_FIRED_TIMER_QUEUE_SIZE) {
-        val dropIndex = firedTimerQueue.indexOfFirst { it.type == FiredTimerType.INTERVAL }
-        if (dropIndex >= 0) {
-          val dropped = firedTimerQueue.removeAt(dropIndex)
-          pendingIntervalEventIds.remove(dropped.id.toInt())
-          Log.w(TAG, "Fired timer queue reached cap; dropped a pending interval event")
-        } else {
-          Log.w(TAG, "Fired timer queue reached cap with only timeouts pending; dropping timer id=$id")
-          return
-        }
-      }
-
       firedTimerQueue.add(
         FiredTimerEvent(
           id = id.toDouble(),
@@ -1023,7 +1011,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec(), LifecycleEventLis
     private const val TAG = "NitroBgTimer"
     private const val WAKE_LOCK_TAG = "NitroBgTimer::WakeLock"
     private const val TIMERS_AVAILABLE_EVENT = "NitroBackgroundTimerTimersAvailable"
-    private const val MAX_FIRED_TIMER_QUEUE_SIZE = 1024
 
     private val nextForegroundServiceOwnerId = AtomicLong(1)
     private val foregroundServiceOwners = ConcurrentHashMap<Long, WeakReference<NitroBackgroundTimer>>()

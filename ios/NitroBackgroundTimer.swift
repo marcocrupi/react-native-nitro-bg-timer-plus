@@ -25,7 +25,6 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
   private static let logTag = "[NitroBgTimer]"
   private static let timersAvailableNotificationName = Notification.Name("NitroBackgroundTimerTimersAvailableNotification")
-  private static let maxFiredTimerQueueSize = 1024
 
   override init() {
     super.init()
@@ -180,18 +179,6 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
     if type == .interval && pendingIntervalEventIds.contains(id) {
       firedTimerQueueLock.unlock()
       return
-    }
-
-    if firedTimerQueue.count >= Self.maxFiredTimerQueueSize {
-      if let dropIndex = firedTimerQueue.firstIndex(where: { $0.type == .interval }) {
-        let dropped = firedTimerQueue.remove(at: dropIndex)
-        pendingIntervalEventIds.remove(Int(dropped.id))
-        logWarn("Fired timer queue reached cap; dropped a pending interval event")
-      } else {
-        firedTimerQueueLock.unlock()
-        logWarn("Fired timer queue reached cap with only timeouts pending; dropping timer id=\(id)")
-        return
-      }
     }
 
     firedTimerQueue.append(
