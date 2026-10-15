@@ -23,10 +23,10 @@ mechanisms and remains subject to Android and iOS operating-system limits.
 - 🔄 Background-aware scheduling with platform-specific limits
 - 📱 Cross-platform support (iOS & Android)
 - 🚀 Zero-bridge overhead with direct native calls
-- 🛡️ Three-layer cleanup defense: explicit `dispose()`, automatic Activity lifecycle hooks, GC fallback
+- 🛡️ Explicit `dispose()` and Android runtime-scoped cleanup across React Native reloads
 - 🎯 Near-zero drift on Android while the foreground service is active (implicit fallback, or explicit `startBackgroundMode` / `stopBackgroundMode` for long sessions)
 - 🔔 Customizable persistent notification via `configure()` (title, text, icon, channel)
-- 🔒 Thread-safe by design — all native state serialized on a dedicated worker thread (Android) or main queue (iOS)
+- 🔒 Synchronized native lifecycle and service ownership; serialized timer runnables
 - 🛡️ Graceful fallback if `WAKE_LOCK` permission is missing — no crash, just a warning
 - ✅ 56 unit tests + manual release checklist
 
@@ -102,10 +102,9 @@ to add anything to your own `AndroidManifest.xml`:
 There is, however, **one thing you should do yourself** if your app
 targets Android 13 or later: request the `POST_NOTIFICATIONS` runtime
 permission from the user as part of your onboarding flow. Without it,
-the persistent notification may be hidden, and on newer Android versions
-foreground-service promotion can fail. If that happens, timers continue
-through the wake-lock-only fallback, but background drift can be higher
-than with an active foreground service.
+the persistent notification may be hidden. Recoverable foreground-service
+start refusals leave timers on wake-lock-only scheduling while the process
+remains alive; see the service limitations below.
 
 See the [Background Mode (Android)](#background-mode-android) section
 below for the full picture of what the foreground service does, when
@@ -257,45 +256,40 @@ unusable**:
 BackgroundTimer.dispose()
 ```
 
+Intervals accept finite nonnegative milliseconds. Accepted values below
+1 ms, including zero, use a minimum native recurring delay of 1 ms on Android
+and iOS. Existing conversions for values at or above 1 ms are preserved:
+Android schedules whole milliseconds, while iOS retains fractional milliseconds.
+OS scheduling and event coalescing can delay callbacks; this floor provides no
+real-time precision guarantee. Timeout scheduling is unchanged.
+
 ## Lifecycle and cleanup
 
-The library handles native resource cleanup through a three-layer defense:
+On **Android**, an internal TurboModule owns the native timer instances for
+one React Native runtime. When the runtime is retained, Activity recreation
+preserves its timers. Runtime invalidation disposes all registered instances, releases their
+wake locks and foreground-service demand, and waits for their workers to
+terminate. Raw HybridObjects remain owned until explicit disposal or runtime
+invalidation, including instances whose JavaScript references were dropped.
 
-1. **Automatic native lifecycle hooks.**
-   - On **Android**, the `HybridObject` registers itself as a
-     `LifecycleEventListener` on the active `ReactApplicationContext`. When
-     the host Activity is destroyed, `onHostDestroy` fires and the timer
-     disposes itself deterministically, releasing the wake lock and
-     tearing down the worker thread.
-   - On **iOS**, JSI runtime teardown releases the `HybridObject`, whose
-     `deinit` invalidates all pending `Timer`s and ends the background task.
-2. **Explicit `dispose()`.** Call `BackgroundTimer.dispose()` when you want
-   deterministic teardown earlier than the lifecycle hooks — for example,
-   inside a feature module's shutdown path, or before navigating away from
-   a long-lived screen that owns the timer.
-3. **GC fallback.** If neither of the above runs, Kotlin `finalize()` and
-   Swift `deinit` act as a safety net and release the wake lock / background
-   task when the garbage collector reclaims the instance.
+`BackgroundTimer.dispose()` starts native cleanup earlier and permanently
+marks the wrapper unusable. Android cleanup runs on the timer worker; runtime
+invalidation also waits for pending manual cleanup to finish. On **iOS**,
+explicit disposal and `deinit` invalidate timers and end the background task.
+The iOS lifecycle implementation is unchanged.
 
-In normal production usage, **you do not need to call `dispose()`
-manually** — Activity destroy covers app shutdown. Call it only when you
-have a concrete reason to force early release.
+Clear individual timers when their owning feature finishes. Use `dispose()`
+when the whole singleton is finished. `dispose()`, lifecycle cleanup,
+`clearTimeout`, and `clearInterval` prevent future callbacks but cannot preempt
+a callback already executing in user code. Process termination is handled by
+the OS; lifecycle callbacks are not guaranteed during process death.
 
-`dispose()`, lifecycle cleanup, `clearTimeout`, and `clearInterval`
-prevent future callbacks and release native resources, but they cannot
-preempt a callback that is already executing or blocked in user code.
+### Development: Fast Refresh and runtime reload
 
-### Dev-mode caveat: Fast Refresh / bundle reload
-
-In development, Fast Refresh tears down the JS runtime but keeps the host
-Activity alive, so `onHostDestroy` does **not** fire. In that case the old
-timer instance relies on Kotlin `finalize()` / Swift `deinit` to release
-its wake lock, which is non-deterministic and may leave the lock held
-briefly across a reload. If you are debugging long-running background
-timers during Fast Refresh cycles and notice a leaked wake lock, call
-`BackgroundTimer.dispose()` explicitly from your code before triggering
-the reload — or just rely on process restart to reset state. This
-limitation does not affect production builds.
+Fast Refresh may update modules while preserving the runtime. Clean up timers
+in the feature's effect/unmount path as appropriate. A full React Native
+runtime reload invokes the Android runtime owner's invalidation and resource
+barrier, independently of Activity recreation or garbage collection.
 
 ## Background Mode (Android)
 
@@ -342,6 +336,24 @@ are preserved internally, but continued background execution depends on
 the time the system grants. You can write cross-platform code that calls
 these methods on both platforms without a platform branch.
 
+The Android service is shared across native timer instances. Each instance
+holds demand while explicit background mode or its timers remain active.
+Stopping or disposing one instance releases only its demand; the service stops
+after the final owner releases it. Wake locks remain per instance.
+
+There is one shared notification. The earliest owner still holding service
+demand supplies its configuration; when it leaves, the earliest remaining
+owner takes over. Each owner retains its own configuration for future sessions.
+
+`startBackgroundMode()` returns `void` and requests a session. Recoverable
+Android start refusals are logged; timers continue with the wake-lock fallback
+while the process remains alive. A subsequent explicit call or newly scheduled
+timer can request another start.
+Repeated requests while a start is pending or active are idempotent. There is
+no automatic retry loop, and Android can reject a later attempt as well.
+Platform promotion errors or a missed foreground-start deadline can terminate
+the process; the library does not contain every foreground-service failure.
+
 ### Customizing the notification
 
 Call `configure()` **before** the first timer is accepted/scheduled and
@@ -369,6 +381,9 @@ critical screen), never mid-session.
 After `clearTimeout()` or `clearInterval()` clears the last accepted timer,
 `configure()` can be retried immediately. Android treats IDs already being
 cleared as no longer blocking configuration while native cleanup finishes.
+A subsequent explicit or implicit session uses the new title, text, icon and
+channel selection even if the previous physical stop is pending. Existing
+Android notification channels still follow the platform's channel settings.
 
 ### Required permissions
 
@@ -389,12 +404,10 @@ flow as part of their onboarding, and silently triggering the system
 dialog from a timer library would be surprising.
 
 If the permission is denied, the foreground service notification may be
-hidden. On newer Android versions, the service may also fail to enter
-foreground; when that happens the library logs the failure and falls back
-to wake-lock-only mode. Timers still run, but background drift can be
-higher than with an active foreground service. Request the permission
-yourself so users can see that a timer is active and Android can promote
-the service normally:
+hidden. Notification visibility and successful service promotion are separate
+observations. Recoverable start refusals can use wake-lock-only scheduling;
+platform promotion failures remain subject to Android's process rules. Request
+the permission yourself so users can see that a timer is active:
 
 ```ts
 import { PermissionsAndroid, Platform } from 'react-native'
@@ -421,11 +434,11 @@ async function ensureNotificationPermission() {
   background services regardless of foreground service type. Ask
   users to whitelist your app in the device battery optimization
   settings.
-- If Android refuses `startForegroundService()` / `startForeground()`, or
-  if the service is removed from the merged manifest without the runtime
-  opt-out, the library logs the failure and continues with wake-lock-only
-  timing. There is no automatic retry loop or backoff; the next timer or
-  explicit background-mode request can attempt to start the service again.
+- Recoverable `startForegroundService()` refusals are logged and reset the
+  internal state, allowing a later explicit or timer request to retry. Timers
+  use wake-lock-only scheduling while the process remains alive. Initial
+  promotion errors or a missed `startForeground()` handshake can instead
+  cause Android to terminate the process. There is no automatic retry loop.
 - iOS is unaffected: `startBackgroundMode`, `stopBackgroundMode`, and
   `configure` are no-ops on iOS. iOS uses `beginBackgroundTask` as a
   limited best-effort mechanism, not as an unlimited background mode.
@@ -492,7 +505,7 @@ BackgroundTimer.disableForegroundService()
 What this does:
 
 - The foreground service is never started, implicitly or explicitly
-- `startBackgroundMode()` becomes a no-op (with a warning log)
+- `startBackgroundMode()` becomes a no-op
 - Timers still run, using only the `PARTIAL_WAKE_LOCK` — background
   timing can drift more than with the foreground service active (similar
   to pre-`0.3.0` behavior)
@@ -505,14 +518,15 @@ This is the easy path — one line of code, no manifest surgery. Use
 it if you're OK with Play Store friction but just want to disable
 the FGS at runtime.
 
-**Important**: `disableForegroundService()` is startup-only. It must be
-called before any timer is accepted, pending, or active, and before
-`startBackgroundMode()` is called. Calling it later throws an `Error`.
-Call it once at app startup, typically in your root component or in your
-`index.js` / `App.tsx`.
+The first `disableForegroundService()` call must precede every timer and
+explicit background-mode request in the process, across all native instances.
+A first call after such use throws, even if the earlier timers have finished.
+After opt-out succeeds, repeated calls are safe no-ops, including while
+wake-lock-only timers are running.
 
-The call is not reversible within the same process. To re-enable
-the foreground service, kill and restart the app without the call.
+Opt-out survives new HybridObjects and React Native runtime reloads in the
+same process. To re-enable the foreground service, restart the process without
+calling it.
 
 #### Level 2 — Manifest removal (zero Play Store friction)
 
@@ -853,19 +867,20 @@ BackgroundTimer.setInterval(() => {
 - Background execution via `PowerManager.PARTIAL_WAKE_LOCK`
   (non-reference-counted, held explicitly for the lifetime of all active
   timers).
-- All state mutations serialized on a dedicated `HandlerThread` to eliminate
-  race conditions between `setTimeout`/`clearTimeout` concurrent callers.
+- Timer runnables execute on a dedicated `HandlerThread`. Lifecycle and shared
+  foreground-service transitions use separate synchronized state.
 - Timer fire delivery is callback-free at the native spec boundary: the
   worker thread records fired timer IDs in a native queue and emits a React
   Native event so the JS wrapper can drain and execute callbacks.
-- The `HybridObject` registers itself as a `LifecycleEventListener` on the
-  `ReactApplicationContext`, so Activity destroy triggers deterministic
-  cleanup in both Bridge and Bridgeless modes.
+- An internal context-scoped TurboModule owns native timer instances and
+  disposes them on React Native runtime invalidation. Activity recreation
+  preserves timers when the runtime is retained.
 - Graceful fallback: if `WAKE_LOCK` permission is missing or revoked, the
   module logs a warning and runs timers without the wake lock instead of
   crashing.
-- Foreground-service failures are logged and fall back to wake-lock-only
-  timing instead of crashing the app.
+- Recoverable foreground-service start refusals are logged and leave timers
+  on wake-lock-only scheduling. Platform-enforced process termination remains
+  possible for promotion errors or a missed foreground-start deadline.
 - Foreground-service stop requests that arrive while a start is still
   `STARTING` are deferred until the service has called `startForeground()`,
   avoiding Android's foreground-service start timeout race.
@@ -896,9 +911,9 @@ BackgroundTimer.setInterval(() => {
   explicitly removed them.
 - On Android 13+, verify that your app has requested the
   `POST_NOTIFICATIONS` runtime permission. If the permission is denied,
-  the notification may be hidden, and on newer Android versions
-  foreground-service promotion can fail. In that fallback path, timers
-  continue with wake-lock-only timing and may drift more in background.
+  the notification may be hidden. Inspect service state separately from
+  notification visibility; recoverable start refusals and fatal promotion
+  errors follow the foreground-service limitations above.
 - Aggressive OEM battery savers (Xiaomi, Huawei, Oppo, etc.) may still
   kill foreground services regardless of the above. Ask the user to
   whitelist your app in the device battery optimization settings.

@@ -34,8 +34,6 @@ import androidx.core.app.NotificationCompat
  * review; a ready-to-paste paragraph is in the README.
  */
 class NitroBackgroundTimerService : Service() {
-  private var currentOwnerId = NO_OWNER_ID
-  private var currentRequestId = NO_REQUEST_ID
 
   override fun onCreate() {
     super.onCreate()
@@ -43,11 +41,16 @@ class NitroBackgroundTimerService : Service() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    Log.i(TAG, "Service onStartCommand (action=${intent?.action})")
+    ForegroundServiceCoordinator.onStart(this, intent, startId)
+    return START_NOT_STICKY
+  }
 
-    val ownerId = intent?.getLongExtra(EXTRA_OWNER_ID, NO_OWNER_ID) ?: NO_OWNER_ID
-    val requestId = intent?.getLongExtra(EXTRA_REQUEST_ID, NO_REQUEST_ID) ?: NO_REQUEST_ID
+  override fun onDestroy() {
+    ForegroundServiceCoordinator.onDestroy(this)
+    super.onDestroy()
+  }
 
+  internal fun promote(intent: Intent?) {
     val config = NotificationConfig(
       title = intent?.getStringExtra(EXTRA_CONFIG_TITLE),
       text = intent?.getStringExtra(EXTRA_CONFIG_TEXT),
@@ -55,70 +58,12 @@ class NitroBackgroundTimerService : Service() {
       channelName = intent?.getStringExtra(EXTRA_CONFIG_CHANNEL_NAME),
       iconResourceName = intent?.getStringExtra(EXTRA_CONFIG_ICON_RESOURCE_NAME)
     )
-
-    try {
-      val notification = buildNotification(config)
-      // API 34+ (UPSIDE_DOWN_CAKE) requires passing the foreground service
-      // type explicitly for the new API-34 typed services. On older APIs
-      // the 2-arg form remains valid and uses the manifest-declared type.
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-        startForeground(
-          NOTIFICATION_ID,
-          notification,
-          ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        )
-      } else {
-        startForeground(NOTIFICATION_ID, notification)
-      }
-    } catch (e: Exception) {
-      // On API 31+ the system can refuse the start with
-      // ForegroundServiceStartNotAllowedException (e.g. background-start
-      // restriction, missing POST_NOTIFICATIONS on API 34+). We log and
-      // bail — the wake-lock-only fallback remains in effect for timers.
-      Log.w(TAG, "startForeground failed, service will stop", e)
-      if (ownerId != NO_OWNER_ID && requestId != NO_REQUEST_ID) {
-        NitroBackgroundTimer.notifyForegroundServiceStartFailed(ownerId, requestId)
-      }
-      stopSelf(startId)
-      return START_NOT_STICKY
+    val notification = buildNotification(config)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+    } else {
+      startForeground(NOTIFICATION_ID, notification)
     }
-
-    if (ownerId == NO_OWNER_ID || requestId == NO_REQUEST_ID) {
-      Log.w(TAG, "Service promoted without owner/request id, stopping")
-      stopSelf(startId)
-      return START_NOT_STICKY
-    }
-
-    currentOwnerId = ownerId
-    currentRequestId = requestId
-
-    when (NitroBackgroundTimer.notifyForegroundServiceStarted(ownerId, requestId)) {
-      ForegroundServiceStartResult.ACTIVE -> {
-        Log.i(TAG, "Service running in foreground")
-      }
-      ForegroundServiceStartResult.STOP_AFTER_START -> {
-        Log.i(TAG, "Service promoted then stopping due to pending stop")
-        stopSelf(startId)
-      }
-      ForegroundServiceStartResult.REJECTED -> {
-        Log.w(TAG, "Foreground service request is stale or owner is gone, stopping")
-        stopSelf(startId)
-      }
-    }
-
-    // Do not auto-restart — NitroBackgroundTimer owns the lifecycle and will
-    // re-issue startForegroundService() on the next timer if needed.
-    return START_NOT_STICKY
-  }
-
-  override fun onDestroy() {
-    Log.i(TAG, "Service onDestroy")
-    if (currentOwnerId != NO_OWNER_ID && currentRequestId != NO_REQUEST_ID) {
-      NitroBackgroundTimer.notifyForegroundServiceDestroyed(currentOwnerId, currentRequestId)
-      currentOwnerId = NO_OWNER_ID
-      currentRequestId = NO_REQUEST_ID
-    }
-    super.onDestroy()
   }
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -232,7 +177,116 @@ class NitroBackgroundTimerService : Service() {
     private const val DEFAULT_CHANNEL_NAME = "Background Timer"
     private const val DEFAULT_TITLE = "Background Timer Active"
     private const val DEFAULT_TEXT = "Tap to return to the app"
-    private const val NO_OWNER_ID = -1L
-    private const val NO_REQUEST_ID = -1L
+  }
+}
+
+/** Process-wide service arbitration. Entries contain notification snapshots, not
+ * timers or ReactContexts; release/dispose removes them. Only the two opt-out
+ * scalars intentionally survive runtime teardown until process termination. */
+internal object ForegroundServiceCoordinator {
+  enum class State { STOPPED, STARTING, STARTING_PENDING_STOP, ACTIVE }
+  private val lock = Any()
+  private data class Request(val intent: Intent, val revision: Long)
+  private val requests = linkedMapOf<Long, Request>()
+  private var state = State.STOPPED
+  private var requestId = 0L
+  private var service: NitroBackgroundTimerService? = null
+  private var serviceRequestId = -1L
+  private var disabled = false
+  private var used = false
+
+  fun markUsed() = synchronized(lock) { used = true }
+  fun isDisabled(): Boolean = synchronized(lock) { disabled }
+
+  fun disable() = synchronized(lock) {
+    if (disabled) return@synchronized
+    check(!used) {
+      "disableForegroundService() must be called before any timer is scheduled " +
+        "and before startBackgroundMode(). Call it once at app startup."
+    }
+    disabled = true
+  }
+
+  fun stateFor(ownerId: Long): State = synchronized(lock) {
+    if (requests.containsKey(ownerId)) state else State.STOPPED
+  }
+
+  fun request(context: Context, ownerId: Long, config: Intent, newSession: Boolean, revision: Long) = synchronized(lock) {
+    if (disabled) return@synchronized
+    val representative = requests.keys.firstOrNull()
+    val changed = requests[ownerId]?.revision != revision
+    if (changed || newSession) requests[ownerId] = Request(config, revision)
+    val refresh = (changed || newSession) && representative == ownerId
+    if ((state == State.ACTIVE || state == State.STARTING) && !refresh) return@synchronized
+    start(context)
+  }
+
+  // Called only under lock; serialize Android effects with owner admission.
+  private fun start(context: Context) {
+    val representative = requests.values.firstOrNull() ?: return
+    requestId += 1
+    state = State.STARTING
+    val intent = Intent(representative.intent).apply {
+      putExtra(NitroBackgroundTimerService.EXTRA_REQUEST_ID, requestId)
+    }
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+      else context.startService(intent)
+    } catch (e: Exception) {
+      state = State.STOPPED
+      Log.w("NitroBgTimer", "Failed to start foreground service; retry on next explicit or timer request", e)
+    }
+  }
+
+  fun release(context: Context, ownerId: Long) = synchronized(lock) {
+    val representative = requests.keys.firstOrNull()
+    if (requests.remove(ownerId) == null) return@synchronized
+    if (requests.isNotEmpty()) {
+      // The earliest remaining owner supplies the single shared notification.
+      if (representative == ownerId) start(context)
+    } else when (state) {
+      State.STARTING, State.STARTING_PENDING_STOP -> state = State.STARTING_PENDING_STOP
+      State.ACTIVE, State.STOPPED -> {
+        requestId += 1
+        state = State.STOPPED
+        try {
+          context.stopService(Intent(context, NitroBackgroundTimerService::class.java))
+        } catch (e: Exception) {
+          Log.w("NitroBgTimer", "Failed to stop foreground service", e)
+        }
+      }
+    }
+  }
+
+  fun onStart(instance: NitroBackgroundTimerService, intent: Intent?, startId: Int) = synchronized(lock) {
+    // Even a cancelled startForegroundService Intent must be promoted before
+    // stopping. A stale Intent can only publish CURRENT demand's snapshot.
+    val config = requests.values.firstOrNull()?.intent ?: intent
+    val wasPromoted = service === instance
+    try {
+      instance.promote(config)
+    } catch (e: Exception) {
+      state = State.STOPPED
+      Log.w("NitroBgTimer", "startForeground failed; wake-lock fallback, retry on next request", e)
+      if (!wasPromoted) instance.stopSelf(startId)
+      return@synchronized
+    }
+    service = instance
+    serviceRequestId = requestId
+    if (requests.isEmpty()) {
+      state = State.STOPPED
+      instance.stopSelf(startId)
+    } else {
+      state = State.ACTIVE
+    }
+  }
+
+  fun onDestroy(instance: NitroBackgroundTimerService) = synchronized(lock) {
+    if (service === instance) {
+      service = null
+      // A stop of the old session must not erase a newer pending request.
+      if (serviceRequestId == requestId) state = State.STOPPED
+      serviceRequestId = -1L
+    }
   }
 }

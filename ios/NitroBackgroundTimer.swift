@@ -280,7 +280,7 @@ class NitroBackgroundTimer: HybridNitroBackgroundTimerSpec {
 
       self.acquireBackgroundTask()
 
-      let timer = Timer(timeInterval: interval / 1000.0, repeats: true) { [weak self] _ in
+      let timer = Timer(timeInterval: max(1.0, interval) / 1000.0, repeats: true) { [weak self] _ in
         guard let self = self else { return }
         // If the interval has been cleared while the fire was pending, bail out.
         guard self.intervalTimers[intId] != nil else { return }

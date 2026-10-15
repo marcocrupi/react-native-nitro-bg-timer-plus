@@ -2,7 +2,7 @@
 
 This checklist must be executed on a real device before publishing a new
 version of the library. The unit tests cover the JS layer in isolation; the
-native lifecycle, wake lock behaviour, threading, and Activity-destroy
+native lifecycle, wake lock behaviour, threading, and runtime-invalidation
 cleanup all require manual verification on each platform.
 
 ## Setup
@@ -331,12 +331,10 @@ automation.
 
 ## Android tests
 
-> **Note on Fast Refresh / dev bundle reload**: automatic cleanup on
-> Fast Refresh (bundle reload without Activity destroy) is **not**
-> provided. In dev mode, call `BackgroundTimer.dispose()` manually before
-> reloading, or rely on Kotlin `finalize()` which is non-deterministic.
-> Activity destroy (the production teardown path) is fully covered via
-> the `LifecycleEventListener` hook.
+> Android cleanup follows React Native runtime invalidation. Activity
+> recreation with a retained runtime preserves timers. Fast Refresh can retain
+> the runtime; a full reload must be distinguished by a new runtime/context.
+> Record PID, runtime/context, owner and worker identities during these checks.
 
 ### A1 — Basic timer functionality
 
@@ -361,31 +359,30 @@ automation.
 - [ ] After dispose, calling `clearTimeout` is silent (no throw)
 - [ ] Calling `dispose()` twice is silent
 
-### A4 — Activity destroy cleanup (production teardown path)
+### A4 — Activity recreation preserves the runtime
 
-This is the primary automatic cleanup path on Android. It fires when the
-host Activity is destroyed, which covers user-initiated quit, system kill
-under memory pressure, and process termination.
+- [ ] Start a timeout and interval, record PID, runtime/context, HybridObject
+      and worker identities
+- [ ] Invoke actual `Activity.recreate()` without replacing the JS runtime
+- [ ] Verify the Activity identity changes while runtime/timer/worker stay the
+      same, and timeout/interval callbacks still arrive
+- [ ] Verify the timer is not disposed and its current wake lock/service demand
+      remains valid
 
-- [ ] Start a `setInterval` (e.g. 30s)
-- [ ] Remove the app from the recents screen, or close it from Android
-      system settings
-- [ ] Reopen the app, inspect logcat for
-      `NitroBgTimer: onHostDestroy triggered cleanup` (logged during the
-      previous destroy cycle)
-- [ ] Run `adb shell dumpsys power | grep -i nitrobgtimer` — verify no
-      wake lock held
+### A5 — Runtime reload cleans up old instances
 
-### A5 — Explicit dispose() cleans up on Fast Refresh
+- [ ] Start timers and create a second raw HybridObject; record identities
+- [ ] Invoke a real `ReactHost.reload()` and verify a new runtime/context
+- [ ] Inspect old instances: disposed, workers terminated, timer maps/queue
+      empty, wake locks released and FGS demand removed
+- [ ] Verify new-runtime timeout/interval callbacks and current service demand
+- [ ] Repeat while manual dispose cleanup is pending; the new runtime must
+      follow completion of the old workers
+- [ ] Test explicit double/concurrent dispose and clear-before-fire
 
-Because automatic Fast Refresh cleanup is not provided (see note at top),
-verify that manually calling `dispose()` before reload works as expected.
-
-- [ ] Start a `setInterval` (60s)
-- [ ] Call `BackgroundTimer.dispose()` from a dev button
-- [ ] Trigger Fast Refresh (R+R in emulator or "Reload" from dev menu)
-- [ ] Run `adb shell dumpsys power | grep -i nitrobgtimer` — verify no
-      wake lock held
+Process kill is a separate OS resource-reclamation path and does not prove
+that a Java lifecycle callback ran. Fast Refresh alone is insufficient proof
+of runtime replacement.
 
 ### A6 — SecurityException graceful fallback
 
@@ -429,9 +426,9 @@ library starts/stops the service automatically around active timers.
 - [ ] Grant `POST_NOTIFICATIONS` to the example app
 - [ ] Press "Start" in the Background Test section (no "Start BG Mode" press)
 - [ ] Verify the "Background Timer Active" notification appears in the shade
-- [ ] Verify `NitroBgTimer: Foreground service started` appears in logcat
-- [ ] Press "Stop" — verify the notification disappears and
-      `Foreground service stopped` appears in logcat
+- [ ] Verify current service state is foreground and belongs to the app PID
+- [ ] Press "Stop" — verify no owner demand, service or wake lock remains
+      after cleanup
 
 ### A11 — Explicit background mode stays stable across timers
 
@@ -443,8 +440,8 @@ library starts/stops the service automatically around active timers.
 - [ ] Press "Stop" on the Background Test — notification must stay alive
       (explicit mode still held)
 - [ ] Press "Stop BG Mode" — verify the notification disappears
-- [ ] Verify `Background mode requested explicitly` and `Background mode
-      released explicitly` lines appear in logcat in the right order
+- [ ] Verify current owner demand, service state and notification identity
+      through start and stop, rather than inferring them from historical logs
 
 ### A12 — Notification customization via `configure`
 
@@ -456,6 +453,11 @@ library starts/stops the service automatically around active timers.
 - [ ] Press "Stop BG Mode", then "Start BG Mode" again — same custom
       text should reappear (config persists across service stop/start
       within the same process)
+
+- [ ] Repeat A → stop → configure B → start without waiting for physical
+      stop; inspect actual Notification title/text/icon/channel B
+- [ ] Repeat with implicit timers: clear A → configure B → schedule B while
+      worker cleanup is pending; verify B and unchanged channel policy
 
 ### A13 — Background accuracy with foreground service (regression gate)
 
@@ -532,10 +534,14 @@ offer a stable manual switch for every foreground-service failure mode.
       caveat
 - [ ] Clear the timer, then start another timer — verify the previous failed
       start state does not suppress a future foreground-service start attempt
-- [ ] In a normal manifest build, start explicit background mode, then stop the
-      service from adb or an instrumented hook; verify `Service onDestroy` /
-      `Foreground service destroyed` is logged and a later timer can request
-      the service again
+- [ ] In a normal manifest build, stop the service from an in-app diagnostic
+      hook (the service is not exported); observe real `onDestroy`, then call
+      `startBackgroundMode()` again and verify a fresh active service
+- [ ] Exercise a real permitted OS start-refusal scenario, then retry from
+      foreground; bind both observations to the same process/runtime
+- [ ] For injected promotion failures, distinguish coordinator bookkeeping
+      from Android's foreground-start handshake; throwing before the platform
+      promotion can itself trigger a foreground-service timeout
 
 ### A17 — `configure()` gating around accepted and cleared timers
 
@@ -578,15 +584,46 @@ call `startForeground()`.
       installed and Metro running
 - [ ] Start a timer or explicit background mode, then clear/stop it quickly so
       a stop can arrive while the service start is still in flight
-- [ ] Verify logcat contains
-      `Foreground service stop requested while starting; deferring until service start`
-      when the race is hit
+- [ ] Observe current STARTING_PENDING_STOP in a bounded diagnostic harness;
+      new demand must supersede the pending stop
 - [ ] Verify the service is allowed to call `startForeground()` and then stops
       cleanly if there is no remaining demand
 - [ ] Verify no `ForegroundServiceDidNotStartInTimeException` appears in
       logcat
 - [ ] Verify a later timer or explicit `startBackgroundMode()` call can start
       the foreground service again
+
+### A20 — Shared foreground-service owners
+
+- [ ] Create two native HybridObjects with differing notification configs
+- [ ] Verify the earliest demanded owner supplies the one shared notification
+- [ ] Stop and dispose the first owner while the second has an interval;
+      verify the second's service, wake lock and timer remain valid
+- [ ] Verify notification takeover, then clear/dispose the final owner and
+      inspect service, workers, wake locks and demand registry for cleanup
+- [ ] Deliver delayed/stale starts and old-service destruction in a bounded
+      harness; current demand and notification must survive
+
+### A21 — Process opt-out
+
+- [ ] In a fresh process, disable FGS before scheduling; schedule timers and
+      repeat disable, verifying no throw and wake-lock-only delivery
+- [ ] Create another HybridObject and reload RN in the same process; opt-out
+      must persist, with no service demand or notification
+- [ ] In separate fresh processes, first disable after timer use (including
+      completed use) or another owner's active use must throw
+
+### A22 — Recurring interval floor (Android and iOS)
+
+- [ ] Exercise 0, 0.1, 0.5, 0.999, 1, 1.5, 2 and 10 ms plus an ordinary interval
+- [ ] Inspect native effective scheduling: sub-ms values use at least 1 ms;
+      values >=1 preserve each platform's existing conversion
+- [ ] Run finitely many short intervals; verify bounded/coalesced delivery,
+      successful clear, worker/run-loop progress and dispose cleanup
+- [ ] Verify one-shot timeout conversion/delivery is unchanged
+
+This checks a scheduling floor, not millisecond callback precision. Use finite
+runs on dedicated virtual devices; long physical-device stress is unnecessary.
 
 ## iOS tests
 
@@ -608,9 +645,11 @@ call `startForeground()`.
 
 ### I4 — Bundle reload cleanup
 
-- [ ] Start a `setInterval`, trigger Fast Refresh
-- [ ] Verify `[NitroBgTimer] debug: deinit triggered` appears in Xcode
-      console (debug builds only)
+- [ ] Start a `setInterval`, then trigger a full React Native runtime reload
+- [ ] Record old/new runtime identities to prove the runtime was replaced
+- [ ] Verify old-instance timer/background-task cleanup; use
+      `[NitroBgTimer] debug: deinit triggered` as supporting evidence in debug
+      builds, alongside current resource observations
 
 ### I5 — Background task expiration
 
