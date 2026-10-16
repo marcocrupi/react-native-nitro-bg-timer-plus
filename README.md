@@ -10,10 +10,9 @@ Native timeout and interval scheduling for Android and iOS, built with Nitro
 Modules. Application callbacks run in JavaScript; background execution depends
 on the time and resources the operating system grants your app.
 
-This README describes **the current checkout, including unreleased changes
-after 0.4.0**. The expanded peer ranges and compatibility patch below are not in
-the published 0.4.0 package. See [Unreleased](CHANGELOG.md#unreleased) and use
-the documentation from the matching release tag when consuming a published version.
+This README describes **version 0.5.0**. See the
+[release notes](CHANGELOG.md#050---2026-10-16) for the compatibility changes since
+0.4.0. Use the documentation from the matching release tag when consuming another version.
 
 ## Requirements
 
@@ -27,9 +26,9 @@ The current [manifest](package.json) declares:
 | Node | `^22.13.0 \|\| ^24.3.0 \|\| >=26.0.0` |
 | Repository package manager | Yarn `4.6.0` |
 
-> **Unreleased:** these ranges apply to this checkout. The published 0.4.0
-> package pins React Native `0.87.1` and Nitro Modules `0.37.1`, and does not
-> contain the compatibility patch described below.
+> **Upgrading from 0.4.0:** that release pins React Native `0.87.1` and Nitro
+> Modules `0.37.1`. Version 0.5.0 broadens the RN peer range and includes the
+> opt-in compatibility patch described below.
 
 Use a native React Native application with the **New Architecture**; Old
 Architecture is not supported. The React Native floor comes from Nitro Modules
@@ -113,15 +112,16 @@ compatibility with every device, OS version, power mode or store distribution.
 
 ## Installation
 
-For the **published 0.4.0 release**, use RN `0.87.1` and Nitro `0.37.1`:
+Install version **0.5.0** and Nitro in a native React Native app within the
+declared range:
 
 ```sh
-npm install react-native-nitro-bg-timer-plus@0.4.0 react-native-nitro-modules@0.37.1
+npm install react-native-nitro-bg-timer-plus@0.5.0 react-native-nitro-modules@0.37.1
 # Or:
-yarn add react-native-nitro-bg-timer-plus@0.4.0 react-native-nitro-modules@0.37.1
+yarn add react-native-nitro-bg-timer-plus@0.5.0 react-native-nitro-modules@0.37.1
 ```
 
-To use the **unreleased compatibility changes**, build this checkout:
+To build a local archive instead of installing from npm:
 
 ```sh
 # In the library checkout; npm pack runs the Bob build through prepack.
@@ -132,9 +132,9 @@ npm pack
 Then install the resulting archive in your application, replacing the path:
 
 ```sh
-npm install /absolute/path/to/react-native-nitro-bg-timer-plus-0.4.0.tgz react-native-nitro-modules@0.37.1
+npm install /absolute/path/to/react-native-nitro-bg-timer-plus-0.5.0.tgz react-native-nitro-modules@0.37.1
 # Or:
-yarn add /absolute/path/to/react-native-nitro-bg-timer-plus-0.4.0.tgz react-native-nitro-modules@0.37.1
+yarn add /absolute/path/to/react-native-nitro-bg-timer-plus-0.5.0.tgz react-native-nitro-modules@0.37.1
 ```
 
 For iOS RN 0.78–0.83, apply the [compatibility patch](compat/README.md) before
