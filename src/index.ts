@@ -219,11 +219,11 @@ export const BackgroundTimer = {
    * while `clearTimeout` and `clearInterval` are silently no-op. Calling
    * `dispose()` twice is safe and idempotent.
    *
-   * Calling `dispose()` is **not** required for correct cleanup in normal
-   * usage — the library registers native lifecycle hooks that release
-   * resources on bundle reload and app destroy, and falls back to GC
-   * finalizers otherwise. Call it explicitly when you want deterministic
-   * teardown, e.g. before tearing down an isolated feature module.
+   * This wrapper is shared by all consumers. Use clearTimeout/clearInterval
+   * for ordinary feature cleanup; dispose only when every consumer is done.
+   * Return is not a synchronous cross-platform resource-settlement receipt:
+   * iOS cleanup is dispatched to the main queue. Process termination does
+   * not guarantee that cleanup callbacks run.
    */
   dispose(): void {
     if (isDisposed) return
@@ -237,9 +237,10 @@ export const BackgroundTimer = {
 
   /**
    * Configures the Android foreground service notification used when
-   * background mode is active. Must be called before any timer is
-   * scheduled and before `startBackgroundMode()` — calling it while the
-   * service is already running throws on the native side.
+   * background mode is active. This owner must have no explicit hold or
+   * uncleared accepted/pending/active timers. Clear its timers and stop
+   * its explicit hold before reconfiguration; other owners may remain active.
+   * New sessions snapshot the configuration; this does not edit a live session.
    *
    * On iOS this is a no-op: iOS does not use a foreground service for
    * background scheduling (the main run loop + `beginBackgroundTask`
@@ -257,20 +258,17 @@ export const BackgroundTimer = {
   },
 
   /**
-   * Requests background mode explicitly. On Android, this starts a
-   * foreground service that keeps the host process at foreground
-   * scheduling priority for the entire session, so `setInterval` /
-   * `setTimeout` fire with zero drift even in background / screen-off.
-   * The accompanying persistent notification stays stable until
-   * `stopBackgroundMode()` or `dispose()` is called.
+   * Requests an explicit Android foreground-service hold, including when
+   * there are no timers. Starts remain subject to OS restrictions and can
+   * fail. Neither service promotion nor timer precision is guaranteed.
    *
-   * Use this when you have a known critical session (workout, recording,
-   * tracking) and want one stable notification for its duration, instead
-   * of the implicit-fallback behaviour that starts/stops the service
-   * around each individual timer.
+   * Use it to retain this owner's service demand across gaps between timers.
+   * The service and notification are shared: another owner can retain demand
+   * or supply the notification after this owner releases its hold.
    *
-   * Idempotent: multiple calls have no additional effect. On iOS this is
-   * a no-op — iOS handles background timer accuracy natively.
+   * Repeated pending/active requests add no holds. A later request can retry
+   * a recoverable refusal. After process-wide FGS opt-out, native start is a
+   * no-op. On iOS this is a no-op and does not extend its background budget.
    *
    * @throws if called on a disposed `BackgroundTimer` instance.
    */
@@ -299,20 +297,20 @@ export const BackgroundTimer = {
 
   /**
    * Disables the automatic Android foreground service fallback for the
-   * lifetime of the process. Must be called before any timer is scheduled
-   * and before `startBackgroundMode()` — calling it later throws. Not
-   * reversible within the same process. Idempotent: second and subsequent
-   * calls are silent no-ops. iOS: no-op.
+   * lifetime of the process. The first successful call must precede any
+   * timer acceptance or explicit background request across all native owners;
+   * a first call after such use throws even if the timers have finished.
+   * After successful opt-out, repeated calls are no-ops, including with active
+   * timers. Only a fresh process can enable FGS again. iOS: no-op.
    *
-   * Use this when your app does not need accurate background scheduling,
-   * or when you already have your own foreground service (e.g. media
-   * playback, location tracking) and don't want a second one. Timers
-   * keep working via the wake-lock fallback with ~10% drift in background.
+   * Timers can use the wake-lock fallback while the process remains alive.
+   * There is no guaranteed drift percentage, background execution window
+   * or process survival. The wrapper always forwards this method, including
+   * after disposal; Android's native implementation ignores disposed owners.
    *
-   * See the "Disabling the foreground service" section of the README for
-   * full semantics, including how to pair the runtime opt-out with
-   * `tools:node="remove"` manifest entries to eliminate the Play Store
-   * `specialUse` review friction entirely.
+   * See the README's "Notifications and opt-out" section for app-side
+   * manifest-merger removal. Runtime opt-out does not remove service or
+   * permission declarations and does not establish store approval.
    */
   disableForegroundService(): void {
     NitroBackgroundTimer.disableForegroundService()

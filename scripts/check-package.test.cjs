@@ -491,6 +491,8 @@ try {
     'nitrogen/generated/ios/NitroBackgroundTimer+autolinking.rb',
     'android/src/main/AndroidManifest.xml',
     'ios/NitroBackgroundTimer.swift',
+    'compat/react-native-nitro-modules+0.37.1.patch',
+    'compat/README.md',
   ])
     check(
       'missing-' + file.replace(/[^a-zA-Z0-9]/g, '-'),

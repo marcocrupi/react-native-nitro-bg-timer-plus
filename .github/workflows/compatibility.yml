@@ -1,0 +1,144 @@
+name: Compatibility
+
+# Builds the packed library in a fresh app for each React Native minor covered
+# by the declared peer range (New Architecture, RN >= 0.78; Nitro 0.37 does not
+# compile against RN 0.76/0.77).
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'ios/**'
+      - 'src/**'
+      - 'nitrogen/**'
+      - 'nitro.json'
+      - '*.podspec'
+      - 'package.json'
+      - 'yarn.lock'
+      - 'react-native.config.js'
+      - 'scripts/compat-*'
+      - 'compat/**'
+      - '.github/workflows/compatibility.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'ios/**'
+      - 'src/**'
+      - 'nitrogen/**'
+      - 'nitro.json'
+      - '*.podspec'
+      - 'package.json'
+      - 'yarn.lock'
+      - 'react-native.config.js'
+      - 'scripts/compat-*'
+      - 'compat/**'
+      - '.github/workflows/compatibility.yml'
+
+concurrency:
+  group: compatibility-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness:
+    name: Harness (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn test:compat
+        env:
+          TMPDIR: ${{ runner.temp }}
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-harness-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/compat-matrix-tests-*/**/*.log
+            ${{ runner.temp }}/compat-matrix-tests-*/**/trace.jsonl
+            ${{ runner.temp }}/compat-matrix-tests-*/**/summary.txt
+
+  android:
+    needs: harness
+    name: Android RN ${{ matrix.rn }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        rn:
+          - 0.78.3
+          - 0.79.7
+          - 0.80.3
+          - 0.81.6
+          - 0.82.1
+          - 0.83.10
+          - 0.84.1
+          - 0.85.3
+          - 0.86.3
+          - 0.87.1
+          - 0.88.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: scripts/compat-matrix.sh --platform android --work-dir "$RUNNER_TEMP/compat" ${{ matrix.rn }}
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-android-${{ matrix.rn }}
+          path: ${{ runner.temp }}/compat/*.log
+
+  # RN <= 0.83 requires the explicit, packaged Nitro 0.37.1 header patch.
+  # Newer RN lanes retain stock Nitro. No peer constraints are relaxed.
+  ios:
+    needs: harness
+    name: iOS RN ${{ matrix.rn }}${{ matrix.nitro_ios_compat && ' / patched Nitro' || '' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rn: 0.78.3, runner: macos-15, xcode: '16.4', nitro_ios_compat: true }
+          - { rn: 0.79.7, runner: macos-15, xcode: '16.4', nitro_ios_compat: true }
+          - { rn: 0.80.3, runner: macos-15, xcode: '16.4', nitro_ios_compat: true }
+          - { rn: 0.81.6, runner: macos-15, xcode: '16.4', nitro_ios_compat: true }
+          - { rn: 0.82.1, runner: macos-15, xcode: '16.4', nitro_ios_compat: true }
+          - { rn: 0.83.10, runner: macos-15, xcode: '16.4', nitro_ios_compat: true }
+          - { rn: 0.84.1, runner: macos-latest }
+          - { rn: 0.85.3, runner: macos-latest }
+          - { rn: 0.86.3, runner: macos-latest }
+          - { rn: 0.87.1, runner: macos-latest }
+          - { rn: 0.88.0, runner: macos-latest }
+    steps:
+      - uses: actions/checkout@v4
+      - if: matrix.xcode
+        run: sudo xcode-select -s "/Applications/Xcode_${{ matrix.xcode }}.app"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: scripts/compat-matrix.sh --platform ios --work-dir "$RUNNER_TEMP/compat" ${{ matrix.nitro_ios_compat && '--nitro-ios-compat' || '' }} ${{ matrix.rn }}
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-ios-${{ matrix.rn }}
+          path: ${{ runner.temp }}/compat/*.log

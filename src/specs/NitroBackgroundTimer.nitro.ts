@@ -21,10 +21,10 @@ export interface NitroBackgroundTimer extends HybridObject<{
   clearInterval(id: number): void
   drainFiredTimers(): FiredTimerEvent[]
   /**
-   * Explicitly request background mode. On Android, starts a foreground
-   * service that keeps the process at foreground scheduling priority for
-   * accurate timer delivery. Idempotent. iOS: no-op (iOS handles
-   * background scheduling natively).
+   * Request this owner's explicit Android foreground-service hold. Starts
+   * are subject to OS restrictions; timing and promotion are not guaranteed.
+   * Repeated pending/active requests add no holds. A later request can retry
+   * a recoverable refusal. iOS: no-op; does not extend the background budget.
    */
   startBackgroundMode(): void
   /**
@@ -35,19 +35,19 @@ export interface NitroBackgroundTimer extends HybridObject<{
   stopBackgroundMode(): void
   /**
    * Configure the foreground service notification. Accepts a JSON-
-   * serialized `BackgroundTimerConfig`. Must be called before the service
-   * is active; throws otherwise. iOS: no-op.
+   * serialized `BackgroundTimerConfig`. This owner must have no explicit
+   * hold or uncleared accepted/pending/active timers; throws otherwise.
+   * Other owners may remain active. iOS: no-op.
    */
   configure(configJson: string): void
   /**
    * Disable the automatic Android foreground service fallback for the
-   * lifetime of the process. Must be called before any timer is
-   * scheduled and before `startBackgroundMode()`. Throws on Android
-   * (`IllegalStateException` → JS `Error`) if called after a timer
-   * has already activated the foreground service. Not reversible
-   * within the same process — call once at app startup. Idempotent:
-   * second and subsequent calls are silent no-ops. iOS: no-op (iOS
-   * has no foreground service concept).
+   * lifetime of the process. The first successful call must precede any
+   * timer acceptance or explicit request across all owners, including
+   * already-finished timers. A late first call throws on Android
+   * (`IllegalStateException` → JS `Error`). After successful opt-out,
+   * repeated calls are no-ops. Only a fresh process can enable FGS again.
+   * iOS: no-op. Android ignores calls on disposed owners.
    */
   disableForegroundService(): void
 }

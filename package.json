@@ -29,12 +29,14 @@
     "app.plugin.js",
     "nitro.json",
     "*.podspec",
-    "README.md"
+    "README.md",
+    "compat"
   ],
   "scripts": {
     "build": "bob build",
     "prepack": "npm run build",
     "test:package": "node scripts/check-package.cjs",
+    "test:compat": "node --test scripts/compat-matrix.test.cjs",
     "test": "jest",
     "test:watch": "jest --watch",
     "typecheck": "tsc --noEmit",
@@ -106,8 +108,8 @@
   },
   "peerDependencies": {
     "react": "*",
-    "react-native": "0.87.1",
-    "react-native-nitro-modules": "0.37.1"
+    "react-native": ">=0.78.0",
+    "react-native-nitro-modules": "^0.37.1"
   },
   "engines": {
     "node": "^22.13.0 || ^24.3.0 || >=26.0.0"

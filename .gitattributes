@@ -1,0 +1,2 @@
+# Unified diff context lines intentionally contain one space.
+compat/*.patch whitespace=-blank-at-eol

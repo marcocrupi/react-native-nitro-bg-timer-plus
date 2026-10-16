@@ -811,6 +811,8 @@ async function checkPackage() {
       'react-native.config.js',
       'nitro.json',
       'NitroBackgroundTimer.podspec',
+      'compat/react-native-nitro-modules+0.37.1.patch',
+      'compat/README.md',
       'android/build.gradle',
       'android/gradle.properties',
       'android/CMakeLists.txt',
